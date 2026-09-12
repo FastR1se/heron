@@ -146,8 +146,23 @@ def _joint_bounds(profile: RobotProfile, index: int) -> tuple[float, float] | No
     return to_radians(bounds.min[index], unit), to_radians(bounds.max[index], unit)
 
 
+def observed_joints(profile: RobotProfile, description: UrdfModel) -> list[str]:
+    """Movable joints of the description the contract does not name (ADR-0012).
+
+    The platform reads their state and cannot command them: they get state
+    interfaces and no command interface. A joint nobody reads cannot be compared
+    with anything, and a robot drawn without half its links looks healthy.
+    """
+    declared = set(profile.contract.joint_order)
+    return [item.name for item in description.commandable_joints if item.name not in declared]
+
+
 def ros2_control_block(instance: Instance, description: UrdfModel) -> ET.Element:
-    """The ``<ros2_control>`` element describing this robot's interfaces."""
+    """The ``<ros2_control>`` element describing this robot's interfaces.
+
+    Two sources, each in its own role (ADR-0012): the contract says what is
+    commanded, the description says what moves.
+    """
     profile = instance.profile
     command = command_interface(profile)
     states = state_interfaces(profile)
@@ -165,6 +180,11 @@ def ros2_control_block(instance: Instance, description: UrdfModel) -> ET.Element
             low, high = bounds
             ET.SubElement(command_element, "param", {"name": "min"}).text = f"{low:g}"
             ET.SubElement(command_element, "param", {"name": "max"}).text = f"{high:g}"
+        for state in states:
+            ET.SubElement(joint, "state_interface", {"name": state})
+
+    for name in observed_joints(profile, description):
+        joint = ET.SubElement(element, "joint", {"name": name})
         for state in states:
             ET.SubElement(joint, "state_interface", {"name": state})
     return element

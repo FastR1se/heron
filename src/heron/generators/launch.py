@@ -110,6 +110,19 @@ def _robot(parent: ET.Element, instance: Instance) -> None:
     )
 
     if not instance.controlled:
+        # An obstacle has no controller manager, so nothing reports its joints
+        # and the visualization draws it up to its first movable one. Its physics
+        # is frozen, so default values are a fact rather than an assumption
+        # (ADR-0012).
+        ET.SubElement(
+            group,
+            "node",
+            {
+                "pkg": "joint_state_publisher",
+                "exec": "joint_state_publisher",
+                "name": "joint_state_publisher",
+            },
+        )
         return
     for controller in spawner_arguments(instance):
         ET.SubElement(

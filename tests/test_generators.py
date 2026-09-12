@@ -432,3 +432,29 @@ def test_the_namespace_is_the_same_everywhere(tmp_path: Path) -> None:
     assert "/arm1/controller_manager:" in files["arm1/controllers.yaml"]
     assert '<push-ros-namespace namespace="arm1" />' in files["bringup.launch.xml"]
     assert "arm1/base_link" in files["view.rviz"]
+
+
+def test_movable_joints_outside_the_contract_are_observed(tmp_path: Path) -> None:
+    """ADR-0012, found by a real run: the gripper rendered as missing links.
+    The contract says what is commanded, the description says what moves."""
+    profile = _profile(tmp_path, contract=make_contract(dof=2, joint_order=["a", "b"]))
+    write_urdf(tmp_path, "arm", ["a", "b", "finger"])
+    generated = merged_description(_instance(tmp_path, profile), tmp_path / "out").content
+
+    assert '<joint name="finger">' in generated
+    block = generated.split('<joint name="finger">')[1]
+    assert "<state_interface" in block.split("</joint>")[0]
+    assert "<command_interface" not in block.split("</joint>")[0], (
+        "наблюдаемый сустав не должен получать командный интерфейс"
+    )
+
+
+def test_an_obstacle_gets_a_joint_state_publisher(tmp_path: Path) -> None:
+    """It has no controller manager, so nothing else would report its joints."""
+    _profile(tmp_path)
+    scenario = _scenario(robots=({"id": "rock", "profile": "arm", "role": "static"},))
+    bundle = build(scenario, Registry([tmp_path]), into=tmp_path / "out")
+    launch = next(f for f in bundle.files if str(f.path).endswith(".launch.xml")).content
+
+    assert 'pkg="joint_state_publisher"' in launch
+    assert "spawner" not in launch, "у препятствия нет контроллеров"
