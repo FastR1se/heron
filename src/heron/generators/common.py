@@ -72,6 +72,29 @@ class Instance:
         return self.role is not Role.STATIC
 
 
+def namespace(instance: Instance) -> str:
+    """ROS 2 namespace of one robot: its scenario id, and nothing else.
+
+    Named here rather than spelled out at each use, because four generators
+    depend on the three of them agreeing -- the plugin that starts the controller
+    manager, the launch file that pushes the namespace, the parameter file that
+    has to reach that node, and the frames the visualization looks for.
+    """
+    return instance.id
+
+
+def node_name(instance: Instance, node: str) -> str:
+    """Fully qualified name of a node belonging to this robot.
+
+    Parameter files are matched against a node's *fully qualified* name, so a
+    file written for ``controller_manager`` never reaches
+    ``/arm1/controller_manager`` and every parameter in it is silently ignored --
+    including the ones that say which controllers exist. The namespace is known,
+    so the name is derived instead of being left to a wildcard.
+    """
+    return f"/{namespace(instance)}/{node}"
+
+
 def resolve_description(profile: RobotProfile, profile_path: Path) -> Path:
     """Where a profile's description file is, relative to the profile itself.
 

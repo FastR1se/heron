@@ -24,7 +24,7 @@ from typing import Final
 from xml.etree import ElementTree as ET
 
 from ..core.models import Scenario
-from .common import XML_COMMENT, GeneratedFile, Instance, header, xml_text
+from .common import XML_COMMENT, GeneratedFile, Instance, header, namespace, xml_text
 from .ros2_control import description_path, spawner_arguments
 from .rviz import RVIZ_FILE, frame_prefix
 
@@ -69,7 +69,7 @@ def _simulator(parent: ET.Element, world: str) -> None:
 
 def _robot(parent: ET.Element, instance: Instance) -> None:
     group = ET.SubElement(parent, "group")
-    ET.SubElement(group, "push-ros-namespace", {"namespace": instance.id})
+    ET.SubElement(group, "push-ros-namespace", {"namespace": namespace(instance)})
 
     description = f"$(var {BUNDLE_VAR})/{description_path(instance)}"
     publisher = ET.SubElement(

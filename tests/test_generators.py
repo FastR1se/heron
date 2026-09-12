@@ -121,7 +121,7 @@ def test_the_manager_rate_comes_from_the_contract(tmp_path: Path) -> None:
     profile = _profile(tmp_path, contract=make_contract(dof=3, state_rate_hz=250.0))
     document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
 
-    assert document["controller_manager"]["ros__parameters"]["update_rate"] == 250
+    assert document["/arm1/controller_manager"]["ros__parameters"]["update_rate"] == 250
 
 
 def test_joints_keep_the_order_of_the_contract(tmp_path: Path) -> None:
@@ -129,7 +129,7 @@ def test_joints_keep_the_order_of_the_contract(tmp_path: Path) -> None:
     profile = _profile(tmp_path, contract=make_contract(dof=3, joint_order=order))
     document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
 
-    assert document["joint_position_controller"]["ros__parameters"]["joints"] == order
+    assert document["/arm1/joint_position_controller"]["ros__parameters"]["joints"] == order
 
 
 def test_the_physics_step_follows_the_fastest_state_rate(tmp_path: Path) -> None:
@@ -402,3 +402,33 @@ def test_the_generated_description_is_not_valid_yaml(tmp_path: Path) -> None:
 
     with pytest.raises(yaml.YAMLError):
         yaml.safe_load(description)
+
+
+def test_parameter_keys_are_fully_qualified(tmp_path: Path) -> None:
+    """Regression, found by a real run: a parameter file is matched against a
+    node's fully qualified name. Keyed on a bare ``controller_manager`` it never
+    reaches ``/arm1/controller_manager``, nothing warns, and the first symptom is
+    a controller reported as having no type."""
+    profile = _profile(tmp_path)
+    document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
+
+    assert set(document) == {
+        "/arm1/controller_manager",
+        "/arm1/joint_position_controller",
+    }
+    manager = document["/arm1/controller_manager"]["ros__parameters"]
+    assert manager["joint_state_broadcaster"]["type"].startswith("joint_state_broadcaster/")
+
+
+def test_the_namespace_is_the_same_everywhere(tmp_path: Path) -> None:
+    """Four generated files have to agree on it: the plugin that starts the
+    controller manager, the launch file that pushes the namespace, the parameter
+    file that must reach that node, and the frames the visualization looks for."""
+    _profile(tmp_path)
+    bundle = build(_scenario(), Registry([tmp_path]), into=tmp_path / "out")
+    files = {str(f.path): f.content for f in bundle.files}
+
+    assert "<namespace>arm1</namespace>" in files["arm1/description.urdf"]
+    assert "/arm1/controller_manager:" in files["arm1/controllers.yaml"]
+    assert '<push-ros-namespace namespace="arm1" />' in files["bringup.launch.xml"]
+    assert "arm1/base_link" in files["view.rviz"]

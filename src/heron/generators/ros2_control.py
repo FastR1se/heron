@@ -42,6 +42,8 @@ from .common import (
     GeneratorError,
     Instance,
     header,
+    namespace,
+    node_name,
     xml_text,
 )
 
@@ -182,7 +184,7 @@ def simulator_plugin_block(instance: Instance, controllers: Path) -> ET.Element:
     )
     ET.SubElement(plugin, "parameters").text = controllers.as_posix()
     ros = ET.SubElement(plugin, "ros")
-    ET.SubElement(ros, "namespace").text = instance.id
+    ET.SubElement(ros, "namespace").text = namespace(instance)
     return element
 
 
@@ -238,9 +240,13 @@ def controllers_config(instance: Instance) -> GeneratedFile:
         controller["command_interfaces"] = [command_interface(profile)]
         controller["state_interfaces"] = state_interfaces(profile)
 
+    # Keys are fully qualified: the controller manager of this robot runs under
+    # the robot's namespace, and a parameter file keyed on a bare node name never
+    # reaches it. Nothing warns about that -- the parameters are simply absent,
+    # and the first sign is a controller that "has no type".
     document: dict[str, Any] = {
-        "controller_manager": {"ros__parameters": manager},
-        name: {"ros__parameters": controller},
+        node_name(instance, "controller_manager"): {"ros__parameters": manager},
+        node_name(instance, name): {"ros__parameters": controller},
     }
     body = yaml.safe_dump(document, allow_unicode=True, sort_keys=False, default_flow_style=False)
     head = header(

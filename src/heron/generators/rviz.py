@@ -24,14 +24,14 @@ from typing import Any, Final
 
 import yaml
 
-from .common import GeneratedFile, Instance, header
+from .common import GeneratedFile, Instance, header, namespace
 
 RVIZ_FILE: Final = "view.rviz"
 
 
 def frame_prefix(instance: Instance) -> str:
     """Transform prefix of one robot. Ends with a slash, as ROS 2 expects."""
-    return f"{instance.id}/"
+    return f"{namespace(instance)}/"
 
 
 def fixed_frame(instance: Instance, root_link: str) -> str:
