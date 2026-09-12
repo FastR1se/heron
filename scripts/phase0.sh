@@ -33,6 +33,7 @@ readonly ISAACLAB_REF="v2.3.0"
 readonly TORCH_SPEC="torch==2.7.0 torchvision==0.22.0"
 readonly TORCH_INDEX="https://download.pytorch.org/whl/cu128"
 readonly FLATDICT_SPEC="flatdict==4.0.1"       # version Isaac Lab pins; see ensure_flatdict
+readonly EXEC_EXTRAS="sim dev"                 # optional groups in pyproject.toml: MuJoCo, tests
 
 readonly INSTALL_STEPS="base ros2 gazebo exec isaac docker"
 readonly VERIFY_ENVS="ros2 gazebo mujoco isaac"
@@ -216,7 +217,8 @@ step_installed() {
         base)   has_cmd uv ;;
         ros2)   [[ -d "/opt/ros/$ROS_DISTRO_NAME" ]] ;;
         gazebo) has_cmd gz ;;
-        exec)   [[ -x "$EXEC_VENV/bin/python" ]] ;;
+        exec)   [[ -x "$EXEC_VENV/bin/python" ]] &&
+                "$EXEC_VENV/bin/python" -c 'import mujoco' >/dev/null 2>&1 ;;
         isaac)  [[ -x "$TRAIN_VENV/bin/python" ]] &&
                 "$TRAIN_VENV/bin/python" -m pip show isaacsim-rl >/dev/null 2>&1 ;;
         docker) has_cmd docker ;;
@@ -384,8 +386,12 @@ install_exec_env() {
     fi
 
     if [[ -f "$REPO_ROOT/pyproject.toml" ]]; then
-        info "найден pyproject.toml — зависимости ставятся из него"
-        run_sh "cd '$REPO_ROOT' && uv sync"
+        # The core installs without vendor dependencies, so MuJoCo sits in an
+        # optional group and a plain `uv sync` would leave the second world out.
+        info "зависимости ставятся из pyproject.toml, группы: $EXEC_EXTRAS"
+        local extras="" name
+        for name in $EXEC_EXTRAS; do extras="$extras --extra $name"; done
+        run_sh "cd '$REPO_ROOT' && uv sync$extras"
     else
         info "пакета ядра ещё нет (фаза 1), ставится только MuJoCo"
         run_sh "VIRTUAL_ENV='$EXEC_VENV' uv pip install mujoco numpy"
@@ -615,6 +621,11 @@ verify_mujoco() {
         info "[dry-run] шаг модели MuJoCo"
         return 0
     fi
+    "$EXEC_VENV/bin/python" -c 'import mujoco' 2>/dev/null || die \
+        "в окружении исполнения нет пакета mujoco" \
+        "Ядро ставится без вендорских зависимостей (раздел 10), поэтому MuJoCo живёт" \
+        "в опциональной группе 'sim' и приходит вместе с шагом установки:" \
+        "    ./phase0.sh install exec"
     "$EXEC_VENV/bin/python" - <<'PY'
 import mujoco
 
