@@ -38,6 +38,12 @@ readonly EXEC_EXTRAS="sim dev"                 # optional groups in pyproject.to
 readonly INSTALL_STEPS="base ros2 gazebo exec isaac docker"
 readonly VERIFY_ENVS="ros2 gazebo mujoco isaac"
 
+# Python packages the ros2_control adapter imports when it connects. Mirrors
+# ADAPTER_PACKAGES in src/heron/ros2/names.py, and verify_mujoco checks that the
+# execution environment can actually import them (ADR-0014). A requirement that
+# is declared and never checked is how phase 2 lost a scene.
+readonly ADAPTER_IMPORTS="rclpy sensor_msgs std_msgs trajectory_msgs builtin_interfaces"
+
 # Thresholds from ADR-0005. Changing a number here is a decision, not a tweak.
 readonly MIN_SWAP_GIB=16                  # 15.3 GiB RAM: swap is what keeps Isaac alive
 readonly MIN_VRAM_MIB=7000                # peak VRAM budget is 7 GiB out of 8
@@ -377,14 +383,51 @@ install_gazebo() {
                 "ros-${ROS_DISTRO_NAME}-gz-ros2-control"
 }
 
+# Python version of the ROS 2 distribution, read off the installation instead of
+# written down. The execution venv has to match it exactly: rclpy is a compiled
+# extension, it arrives through PYTHONPATH when setup.bash is sourced, and an
+# interpreter of another version finds the package and fails on its binary.
+# Nothing warns about that -- the import simply does not resolve.
+#
+# Deliberately NOT $TRAIN_PYTHON. The training stack is pinned to 3.11 by the
+# Isaac Sim wheels and must not share an interpreter with ROS 2 at all
+# (invariant 2), so these are two values and are allowed to differ.
+ros2_python_version() {
+    local lib
+    for lib in "/opt/ros/$ROS_DISTRO_NAME/lib/"python3.*; do
+        [[ -d "$lib" ]] || continue
+        basename "$lib" | sed 's/^python//'
+        return 0
+    done
+    return 1
+}
+
+venv_python_version() {
+    "$1/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null
+}
+
 install_exec_env() {
-    step "Окружение исполнения (MuJoCo)"
+    step "Окружение исполнения (ROS 2 и MuJoCo)"
     has_cmd uv || die "uv не найден" "Сначала выполните шаг base:  scripts/phase0.sh install base"
 
+    local exec_python
+    exec_python="$(ros2_python_version)" || die \
+        "не видно Python дистрибутива ROS 2 в /opt/ros/$ROS_DISTRO_NAME/lib" \
+        "Окружение исполнения обязано совпадать с ним по версии: rclpy — скомпилированное" \
+        "расширение, и интерпретатор другой версии его не загрузит." \
+        "Сначала выполните шаг ros2:  scripts/phase0.sh install ros2"
+    info "Python дистрибутива ROS 2: $exec_python"
+
     if [[ -d "$EXEC_VENV" ]]; then
-        ok "venv уже есть: $EXEC_VENV"
+        local have
+        have="$(venv_python_version "$EXEC_VENV")"
+        [[ "$have" == "$exec_python" ]] || die \
+            "venv исполнения на Python ${have:-?}, а ROS 2 собран под $exec_python" \
+            "Адаптер ros2_control не сможет импортировать rclpy. Пересоздайте окружение:" \
+            "    rm -rf '$EXEC_VENV' && scripts/phase0.sh install exec"
+        ok "venv уже есть: $EXEC_VENV (Python $have)"
     else
-        run uv venv --python "$TRAIN_PYTHON" "$EXEC_VENV"
+        run uv venv --python "$exec_python" "$EXEC_VENV"
     fi
 
     if [[ -f "$REPO_ROOT/pyproject.toml" ]]; then
@@ -615,14 +658,36 @@ verify_gazebo() {
     ok "сервер Gazebo отработал 200 шагов и завершился"
 }
 
+# The other side of ADAPTER_PACKAGES: the environment must provide what the
+# adapter imports. A test in the repository checks that every declared package is
+# installed by this script; only the script can check that they actually import,
+# because the machine the platform is written on has no ROS 2 at all.
+verify_adapter_imports() {
+    local missing=() name
+    for name in $ADAPTER_IMPORTS; do
+        run_sh "source /opt/ros/$ROS_DISTRO_NAME/setup.bash && '$EXEC_VENV/bin/python' -c 'import $name'" \
+            >/dev/null 2>&1 || missing+=("$name")
+    done
+    if (( ${#missing[@]} )); then
+        die "адаптер ros2_control не подключится: не импортируется ${missing[*]}" \
+            "Окружение исполнения и дистрибутив ROS 2 должны совпадать по версии Python:" \
+            "    $(venv_python_version "$EXEC_VENV")  — venv исполнения" \
+            "    $(ros2_python_version)  — ROS 2 $ROS_DISTRO_NAME" \
+            "Если версии разные, пересоздайте окружение:" \
+            "    rm -rf '$EXEC_VENV' && scripts/phase0.sh install exec"
+    fi
+    ok "адаптер ros2_control видит ROS 2: $ADAPTER_IMPORTS"
+}
+
 verify_mujoco() {
-    step "Проверка MuJoCo"
+    step "Проверка окружения исполнения"
     [[ -x "$EXEC_VENV/bin/python" ]] || die "venv исполнения не создан" \
         "Выполните:  scripts/phase0.sh install exec"
     if (( DRY_RUN )); then
-        info "[dry-run] шаг модели MuJoCo"
+        info "[dry-run] импорты адаптера и шаг модели MuJoCo"
         return 0
     fi
+    verify_adapter_imports
     "$EXEC_VENV/bin/python" -c 'import mujoco' 2>/dev/null || die \
         "в окружении исполнения нет пакета mujoco" \
         "Ядро ставится без вендорских зависимостей (раздел 10), поэтому MuJoCo живёт" \

@@ -147,3 +147,24 @@ def test_declared_packages_are_actually_used() -> None:
         if package not in text.replace("ADAPTER_PACKAGES", "")
     )
     assert not unused, f"объявлено, но нигде не используется: {unused}"
+
+
+def test_phase_zero_checks_exactly_the_imports_the_transport_declares() -> None:
+    """The rule of ADR-0013 applied to itself.
+
+    The phase 0 script verifies that the execution environment can import what
+    the adapter needs -- which means it carries a second copy of the list, and a
+    second copy is precisely what let a launch file name a package nobody
+    installed. Held together here, from both sides.
+    """
+    script = REPO_ROOT / "scripts" / "phase0.sh"
+    if not script.is_file():  # pragma: no cover - the script travels with the repo
+        pytest.skip("scripts/phase0.sh отсутствует")
+
+    text = script.read_text(encoding="utf-8")
+    declared = re.search(r'ADAPTER_IMPORTS="([^"]*)"', text)
+    assert declared, "scripts/phase0.sh не объявляет ADAPTER_IMPORTS"
+
+    assert set(declared.group(1).split()) == set(names.ADAPTER_PACKAGES), (
+        "список импортов в скрипте фазы 0 разошёлся с ADAPTER_PACKAGES"
+    )
