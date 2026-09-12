@@ -35,7 +35,6 @@ readonly TORCH_INDEX="https://download.pytorch.org/whl/cu128"
 
 # Thresholds from ADR-0005. Changing a number here is a decision, not a tweak.
 readonly MIN_SWAP_GIB=16                  # 15.3 GiB RAM: swap is what keeps Isaac alive
-readonly MIN_FREE_GIB=64                  # stack without swap: 54-64 GiB
 readonly MIN_VRAM_MIB=7000                # peak VRAM budget is 7 GiB out of 8
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -161,7 +160,9 @@ check_memory() {
     swap_gib="$(gib "$swap_kb")"
     info "RAM: $(gib "$ram_kb") ГиБ, swap: ${swap_gib} ГиБ"
 
-    if awk -v s="$swap_gib" -v m="$MIN_SWAP_GIB" 'BEGIN { exit !(s < m) }'; then
+    # Compared in KiB: the printed value goes through awk and carries the
+    # locale decimal separator, which turns a float comparison into a lie.
+    if (( swap_kb < MIN_SWAP_GIB * 1048576 )); then
         die "swap ${swap_gib} ГиБ, по ADR-0005 нужно не меньше ${MIN_SWAP_GIB} ГиБ" \
             "При 15.3 ГиБ RAM Isaac Sim уходит в OOM без подкачки — ровно та нехватка памяти," \
             "из-за которой отвергнут WSL2." \
@@ -174,13 +175,59 @@ check_memory() {
     ok "памяти достаточно по порогу ADR-0005"
 }
 
+# Rough disk cost of a step in GiB, from the ADR-0005 estimate.
+step_cost_gib() {
+    case "$1" in
+        base)   echo 1  ;;
+        ros2)   echo 4  ;;
+        gazebo) echo 2  ;;
+        exec)   echo 1  ;;
+        isaac)  echo 40 ;;   # Isaac Sim ~20 plus asset cache 10-20
+        docker) echo 10 ;;
+        *)      echo 0  ;;
+    esac
+}
+
+step_installed() {
+    case "$1" in
+        base)   has_cmd uv ;;
+        ros2)   [[ -d "/opt/ros/$ROS_DISTRO_NAME" ]] ;;
+        gazebo) has_cmd gz ;;
+        exec)   [[ -x "$EXEC_VENV/bin/python" ]] ;;
+        isaac)  [[ -x "$TRAIN_VENV/bin/python" ]] &&
+                "$TRAIN_VENV/bin/python" -m pip show isaacsim-rl >/dev/null 2>&1 ;;
+        docker) has_cmd docker ;;
+        *)      return 1 ;;
+    esac
+}
+
+# The question is "is there room for what we are about to install", not "is this
+# a fresh machine". A step already installed occupies its space and asks for no
+# more, so a fixed global threshold would refuse every second run.
 check_disk() {
-    local free_gib
-    free_gib="$(df -BG --output=avail / | tail -1 | tr -dc '0-9')"
-    info "свободно на /: ${free_gib} ГиБ"
-    if (( free_gib < MIN_FREE_GIB )); then
-        die "на / свободно ${free_gib} ГиБ, нужно не меньше ${MIN_FREE_GIB} ГиБ" \
-            "Оценка ADR-0005: Isaac Sim с кэшем ассетов 30-40, ROS 2 desktop 4, Gazebo 2, образы Docker 10."
+    local steps=("$@")
+    (( ${#steps[@]} )) || steps=(base ros2 gazebo exec isaac docker)
+
+    local s need=0 pending=()
+    for s in "${steps[@]}"; do
+        step_installed "$s" && continue
+        pending+=("$s")
+        need=$(( need + $(step_cost_gib "$s") ))
+    done
+
+    local free_kb
+    free_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"   # KiB: no suffix, no locale
+
+    if (( ${#pending[@]} == 0 )); then
+        ok "свободно на /: $(gib "$free_kb") ГиБ; ставить нечего, всё уже на месте"
+        return 0
+    fi
+    info "свободно на /: $(gib "$free_kb") ГиБ; предстоит: ${pending[*]}, оценка ${need} ГиБ"
+
+    if (( free_kb < need * 1048576 )); then
+        die "на / свободно $(gib "$free_kb") ГиБ, на шаги ${pending[*]} нужно около ${need} ГиБ" \
+            "Оценка ADR-0005: Isaac Sim с кэшем ассетов 30-40, ROS 2 desktop 4, Gazebo 2, образы Docker 10." \
+            "Ставьте шаги по одному или освободите место."
     fi
     ok "места достаточно"
 }
@@ -231,13 +278,15 @@ check_network() {
     fi
 }
 
+# Takes the steps that are about to run, so the disk check measures the right
+# thing. Without arguments it assumes the full set.
 cmd_check() {
     step "Предусловия"
     check_os
     check_arch
     check_user
     check_memory
-    check_disk
+    check_disk "$@"
     check_gpu
     check_vulkan
     check_network
@@ -320,6 +369,45 @@ install_exec_env() {
     fi
 }
 
+# isaaclab.sh installs its extensions with `python -m pip` and locates Isaac Sim
+# through pip metadata. `uv venv` creates an environment without pip, so the
+# tool needs it put there explicitly — this is a requirement of isaaclab.sh,
+# not a workaround for it.
+ensure_pip() {
+    local venv="$1"
+    if (( DRY_RUN )); then
+        info "[dry-run] проверка pip в $venv"
+        return 0
+    fi
+    if "$venv/bin/python" -m pip --version >/dev/null 2>&1; then
+        ok "pip в окружении есть"
+        return 0
+    fi
+    info "в окружении нет pip, а isaaclab.sh ставит расширения через него"
+    run_sh "VIRTUAL_ENV='$venv' uv pip install pip setuptools wheel"
+}
+
+# isaacsim-rl comes from the [all] extra and is exactly what isaaclab.sh looks
+# for. Its absence must stop the run here, with the reason named, rather than
+# surface later as "Python executable not found at _isaac_sim/python.sh".
+check_isaacsim_installed() {
+    if (( DRY_RUN )); then
+        info "[dry-run] проверка пакета isaacsim-rl"
+        return 0
+    fi
+    if "$TRAIN_VENV/bin/python" -m pip show isaacsim-rl >/dev/null 2>&1; then
+        ok "пакеты Isaac Sim на месте"
+        return 0
+    fi
+    die "в окружении обучения нет пакета isaacsim-rl" \
+        "Isaac Lab ищет Isaac Sim именно по нему, поэтому дальше идти бессмысленно." \
+        "Вероятная причина: набор extras '[all]' поставлен не полностью." \
+        "Проверьте, что стоит на самом деле:" \
+        "    $TRAIN_VENV/bin/python -m pip list | grep isaacsim" \
+        "Повторная установка:" \
+        "    VIRTUAL_ENV='$TRAIN_VENV' uv pip install --reinstall '$ISAACSIM_SPEC' --extra-index-url https://pypi.nvidia.com"
+}
+
 install_isaac() {
     step "Окружение обучения (Isaac Sim, Isaac Lab, rsl_rl)"
     has_cmd uv || die "uv не найден" "Сначала выполните шаг base:  scripts/phase0.sh install base"
@@ -336,14 +424,16 @@ install_isaac() {
         ok "venv обучения уже есть: $TRAIN_VENV"
     else
         info "отдельный venv на Python ${TRAIN_PYTHON}: миры не делят интерпретатор (инвариант 2)"
-        run uv venv --python "$TRAIN_PYTHON" "$TRAIN_VENV"
+        run uv venv --seed --python "$TRAIN_PYTHON" "$TRAIN_VENV"
     fi
+    ensure_pip "$TRAIN_VENV"
 
     info "torch под CUDA 12.8, несколько ГиБ"
     run_sh "VIRTUAL_ENV='$TRAIN_VENV' uv pip install $TORCH_SPEC --index-url $TORCH_INDEX"
 
     info "Isaac Sim: загрузка десятков ГиБ, шаг долгий"
     run_sh "VIRTUAL_ENV='$TRAIN_VENV' uv pip install '$ISAACSIM_SPEC' --extra-index-url https://pypi.nvidia.com"
+    check_isaacsim_installed
 
     if [[ -d "$ISAACLAB_DIR/.git" ]]; then
         ok "Isaac Lab уже склонирован: $ISAACLAB_DIR"
@@ -537,7 +627,7 @@ cmd_help() {
   scripts/phase0.sh <команда> [аргументы] [флаги]
 
 Команды:
-  check                     проверить предусловия и ничего не менять
+  check [шаг...]            проверить предусловия и ничего не менять
   install [шаг...]          поставить среды; без аргументов — все шаги подряд
   verify [среда...]         запустить среды и убедиться, что они работают
   report                    версии всех сред таблицей для карточки эксперимента
@@ -576,8 +666,8 @@ main() {
     local args=("${positional[@]:1}")
 
     case "$cmd" in
-        check)   cmd_check ;;
-        install) cmd_check; cmd_install "${args[@]}" ;;
+        check)   cmd_check "${args[@]}" ;;
+        install) cmd_check "${args[@]}"; cmd_install "${args[@]}" ;;
         verify)  cmd_verify "${args[@]}" ;;
         report)  cmd_report ;;
         all)     cmd_check; cmd_install; cmd_verify ;;
