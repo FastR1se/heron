@@ -458,3 +458,47 @@ def test_an_obstacle_gets_a_joint_state_publisher(tmp_path: Path) -> None:
 
     assert 'pkg="joint_state_publisher"' in launch
     assert "spawner" not in launch, "у препятствия нет контроллеров"
+
+
+# -- the environment the launch depends on ---------------------------------
+
+
+def _launch_of(tmp_path: Path) -> str:
+    _profile(tmp_path)
+    scenario = _scenario(
+        robots=(
+            {"id": "arm1", "profile": "arm", "role": "scripted"},
+            {"id": "rock", "profile": "arm", "role": "static"},
+        )
+    )
+    bundle = build(scenario, Registry([tmp_path]), into=tmp_path / "out")
+    return next(f for f in bundle.files if str(f.path).endswith(".launch.xml")).content
+
+
+def test_the_launch_names_only_declared_packages(tmp_path: Path) -> None:
+    """A launch that names an absent package does not degrade -- it fails to
+    parse, and the whole scene dies with it (ADR-0013)."""
+    import re
+
+    from heron.generators.launch import LAUNCH_PACKAGES
+
+    launch = _launch_of(tmp_path)
+    used = set(re.findall(r'pkg="([^"]+)"', launch))
+    used |= set(re.findall(r"find-pkg-share ([a-z_0-9]+)", launch))
+
+    assert used, "в запуске не нашлось ни одного узла"
+    assert used <= set(LAUNCH_PACKAGES), f"необъявленные пакеты: {used - set(LAUNCH_PACKAGES)}"
+
+
+def test_every_declared_package_is_installed_by_phase_zero() -> None:
+    """The other side of the same rule: the environment must provide them."""
+    from conftest import REPO_ROOT
+    from heron.generators.launch import LAUNCH_PACKAGES
+
+    script = REPO_ROOT / "scripts" / "phase0.sh"
+    if not script.is_file():  # pragma: no cover - the script travels with the repo
+        pytest.skip("scripts/phase0.sh отсутствует")
+    text = script.read_text(encoding="utf-8")
+
+    missing = sorted({apt for apt in LAUNCH_PACKAGES.values() if apt not in text})
+    assert not missing, f"фаза 0 не ставит: {missing}"

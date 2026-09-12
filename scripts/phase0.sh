@@ -355,8 +355,10 @@ install_ros2() {
                 "ros-${ROS_DISTRO_NAME}-ros2-controllers" \
                 "ros-${ROS_DISTRO_NAME}-xacro" \
                 "ros-${ROS_DISTRO_NAME}-robot-state-publisher" \
+                "ros-${ROS_DISTRO_NAME}-joint-state-publisher" \
                 "ros-${ROS_DISTRO_NAME}-rosbag2-storage-mcap"
     info "MCAP-хранилище rosbag2 поставлено явно: ADR-0003 требует MCAP на исполнении"
+    info "Набор совпадает с LAUNCH_PACKAGES генератора запуска и проверяется тестом (ADR-0013)"
 }
 
 install_gazebo() {

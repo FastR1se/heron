@@ -31,6 +31,26 @@ from .rviz import RVIZ_FILE, frame_prefix
 LAUNCH_FILE: Final = "bringup.launch.xml"
 BUNDLE_VAR: Final = "bundle"
 
+LAUNCH_PACKAGES: Final[dict[str, str]] = {
+    "ros_gz_sim": "ros-gz",
+    "ros_gz_bridge": "ros-gz",
+    "robot_state_publisher": "robot-state-publisher",
+    "joint_state_publisher": "joint-state-publisher",
+    "controller_manager": "ros2-control",
+    "rviz2": "desktop",
+}
+"""ROS 2 packages a generated launch may reference, and what installs each.
+
+Declared here because a launch file that names a package the environment does
+not have does not degrade -- it fails to parse, and the whole scene dies with
+it, including the robots that were fine. A missing node for one obstacle took
+down a working world exactly that way (ADR-0013).
+
+The set is checked from both sides by a test: nothing in a generated launch may
+fall outside it, and everything in it must be installed by the phase 0 script.
+Adding a node from a new package is therefore a change to the environment, made
+deliberately, and not a line that works on one machine."""
+
 CLOCK_BRIDGE: Final = "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"
 """One bridge, one topic: without simulated time every node timestamps with the
 wall clock, and a run recorded that way cannot be replayed (ADR-0003)."""
