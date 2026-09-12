@@ -32,6 +32,10 @@ readonly ISAACSIM_SPEC="isaacsim[all,extscache]==5.1.0"
 readonly ISAACLAB_REF="v2.3.0"
 readonly TORCH_SPEC="torch==2.7.0 torchvision==0.22.0"
 readonly TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+readonly FLATDICT_SPEC="flatdict==4.0.1"       # version Isaac Lab pins; see ensure_flatdict
+
+readonly INSTALL_STEPS="base ros2 gazebo exec isaac docker"
+readonly VERIFY_ENVS="ros2 gazebo mujoco isaac"
 
 # Thresholds from ADR-0005. Changing a number here is a decision, not a tweak.
 readonly MIN_SWAP_GIB=16                  # 15.3 GiB RAM: swap is what keeps Isaac alive
@@ -92,6 +96,25 @@ run_sh() {
 }
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# Names are validated before any work starts. Catching a typo after an hour of
+# downloads is the same defect as catching a contract mismatch on the robot.
+validate_names() {
+    local kind="$1" allowed="$2"
+    shift 2
+    local name
+    for name in "$@"; do
+        if [[ " $allowed " != *" $name "* ]]; then
+            if [[ "$name" == *=* ]]; then
+                die "неизвестный $kind: $name" \
+                    "Похоже на переменную окружения. Она ставится перед командой, а не после:" \
+                    "    ${name} ./phase0.sh ..." \
+                    "Доступны: $allowed"
+            fi
+            die "неизвестный $kind: $name" "Доступны: $allowed"
+        fi
+    done
+}
 
 apt_install() {
     local pkg missing=()
@@ -408,6 +431,65 @@ check_isaacsim_installed() {
         "    VIRTUAL_ENV='$TRAIN_VENV' uv pip install --reinstall '$ISAACSIM_SPEC' --extra-index-url https://pypi.nvidia.com"
 }
 
+# isaaclab.sh installs its modules one by one and exits 0 even when one of them
+# fails to build, so a missing package surfaces much later as an import error in
+# a tutorial. The installed set is checked here instead.
+check_isaaclab_installed() {
+    if (( DRY_RUN )); then
+        info "[dry-run] проверка пакетов Isaac Lab"
+        return 0
+    fi
+    local pkg missing=()
+    for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
+        "$TRAIN_VENV/bin/python" -m pip show "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    done
+    if (( ${#missing[@]} == 0 )); then
+        ok "пакеты Isaac Lab установлены"
+        return 0
+    fi
+    die "после установки не хватает пакетов Isaac Lab: ${missing[*]}" \
+        "isaaclab.sh ставит модули по очереди и завершается успешно, даже если один из них" \
+        "не собрался, — поэтому ошибка всплыла бы позже, при импорте в тьюториале." \
+        "Соберите недостающий модуль вручную и посмотрите на причину:" \
+        "    cd '$ISAACLAB_DIR' && source '$TRAIN_VENV/bin/activate' && ./isaaclab.sh --install rsl_rl"
+}
+
+# flatdict 4.0.1 has a setup.py that imports pkg_resources, which setuptools 81
+# and later no longer ship. pip builds it in an isolated environment where the
+# newest setuptools lands, so the build fails there — and with it the whole
+# isaaclab package, which pins that exact version. Building against the venv's
+# own setuptools is the only way through; the upstream pin is not ours to move.
+ensure_flatdict() {
+    if (( DRY_RUN )); then
+        info "[dry-run] проверка flatdict"
+        return 0
+    fi
+    if "$TRAIN_VENV/bin/python" -m pip show flatdict >/dev/null 2>&1; then
+        ok "flatdict на месте"
+        return 0
+    fi
+    info "flatdict ставится без изоляции сборки: его setup.py требует pkg_resources"
+    run_sh "VIRTUAL_ENV='$TRAIN_VENV' uv pip install --no-build-isolation '$FLATDICT_SPEC'"
+}
+
+# Isaac Lab lifts shared packages above the versions isaacsim-kernel pins. Only
+# a real launch shows whether that matters, so this reports and does not stop:
+# the answer belongs to `verify isaac`, not to a guess made here.
+report_pip_conflicts() {
+    if (( DRY_RUN )); then
+        return 0
+    fi
+    local out
+    if out="$("$TRAIN_VENV/bin/python" -m pip check 2>&1)"; then
+        ok "конфликтов версий в окружении обучения нет"
+        return 0
+    fi
+    warn "конфликты версий в окружении обучения:"
+    printf '%s\n' "$out" | sed 's/^/        /' >&2
+    warn "Isaac Lab поднял пакеты выше пинов isaacsim-kernel."
+    warn "Существенно это или нет, показывает запуск:  ./phase0.sh verify isaac"
+}
+
 install_isaac() {
     step "Окружение обучения (Isaac Sim, Isaac Lab, rsl_rl)"
     has_cmd uv || die "uv не найден" "Сначала выполните шаг base:  scripts/phase0.sh install base"
@@ -442,11 +524,16 @@ install_isaac() {
             https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_DIR"
     fi
 
+    ensure_flatdict
+
     info "Isaac Lab ставится с rsl_rl: других RL-фреймворков в стеке нет (раздел 11)"
     run_sh "cd '$ISAACLAB_DIR' && source '$TRAIN_VENV/bin/activate' && ./isaaclab.sh --install rsl_rl"
 
+    check_isaaclab_installed
+    report_pip_conflicts
+
     info "Первый запуск Isaac Sim компилирует шейдеры: это десятки минут и выглядит как зависание."
-    info "Переменная OMNI_KIT_ACCEPT_EULA=YES нужна в окружении запуска."
+    info "Дальше:  ./phase0.sh verify isaac"
 }
 
 install_docker() {
@@ -666,9 +753,12 @@ main() {
     local args=("${positional[@]:1}")
 
     case "$cmd" in
-        check)   cmd_check "${args[@]}" ;;
-        install) cmd_check "${args[@]}"; cmd_install "${args[@]}" ;;
-        verify)  cmd_verify "${args[@]}" ;;
+        check)   validate_names "шаг установки" "$INSTALL_STEPS" "${args[@]}"
+                 cmd_check "${args[@]}" ;;
+        install) validate_names "шаг установки" "$INSTALL_STEPS" "${args[@]}"
+                 cmd_check "${args[@]}"; cmd_install "${args[@]}" ;;
+        verify)  validate_names "среда" "$VERIFY_ENVS" "${args[@]}"
+                 cmd_verify "${args[@]}" ;;
         report)  cmd_report ;;
         all)     cmd_check; cmd_install; cmd_verify ;;
         help)    cmd_help ;;
