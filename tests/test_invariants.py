@@ -156,12 +156,35 @@ def test_core_has_no_vendor_dependencies() -> None:
 
 
 def test_adding_a_robot_touches_no_core_file() -> None:
-    """A generated stub is a profile and an adapter, and nothing else."""
+    """A generated stub is data plus an adapter, and nothing else.
+
+    The description joins the list in phase 2: it is an input the stub needs to
+    stand in a world at all (ADR-0009), and it is still not a core file.
+    """
     import tempfile
 
     from heron.cli.new_robot import write_stub
 
     with tempfile.TemporaryDirectory() as tmp:
         created = write_stub("some_robot", Path(tmp))
-        assert [p.name for p in created] == ["profile.yaml", "adapter.py"]
+        assert [p.name for p in created] == [
+            "profile.yaml",
+            "adapter.py",
+            "some_robot.urdf",
+        ]
         assert all(Path(tmp) in p.parents for p in created)
+
+
+def test_a_generated_stub_validates_against_its_own_description() -> None:
+    """The stub's two halves agree with each other on the day they are made."""
+    import tempfile
+
+    from heron.cli.new_robot import write_stub
+    from heron.core.loading import load_model
+    from heron.core.models import RobotProfile
+    from heron.validator.rules import check_profile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        profile_path, _, _ = write_stub("some_robot", Path(tmp), dof=4)
+        report = check_profile(load_model(profile_path, RobotProfile), path=profile_path)
+        assert report.ok, report.codes()

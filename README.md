@@ -14,10 +14,12 @@
 
 ## Состояние
 
-Фаза 1 дорожной карты: каркас ядра. Работает цепочка «профиль → валидатор →
-навык → адаптер» без симулятора, ROS 2 и железа.
+Фаза 2 дорожной карты: из профиля и сценария порождаются среды. Работает
+цепочка «профиль → валидатор → генераторы → мир Gazebo с визуализацией в
+RViz». Артефакты собираются и проверяются без симулятора и без ROS 2; сам
+запуск на Linux-машине ещё не выполнялся, и до него фаза не закрыта.
 
-Симуляторы, обучение, генераторы сред и координатор — фазы 2 и дальше.
+Навык, двигающий робота, обучение и координатор — фазы 3 и дальше.
 
 ## Установка ядра
 
@@ -111,7 +113,7 @@ uv pip install -e ".[dev]"
 heron capabilities                        # реестр возможностей ядра
 heron profile show examples/robots/arm6.yaml
 heron contract id examples/robots/arm6.yaml
-heron validate examples/robots/*.yaml examples/scenarios/bench.yaml
+heron validate examples/robots/*.yaml examples/scenarios/table.yaml -R examples/robots
 heron profile new my_robot --into examples/robots
 heron skill check hold examples/robots/rest_arm.yaml
 ```
@@ -119,6 +121,42 @@ heron skill check hold examples/robots/rest_arm.yaml
 Последняя команда — самая показательная: навык требует потокового управления,
 робот принимает команды целиком, и это ошибка валидатора, а не сюрприз во время
 движения.
+
+## Среды из профиля
+
+```bash
+heron gen examples/scenarios/table.yaml --into generated/table -R examples/robots
+heron gen examples/scenarios/table.yaml --into generated/table -R examples/robots --check
+heron sim run examples/scenarios/table.yaml --into generated/table -R examples/robots --dry-run
+```
+
+Порождается то, что выводимо из профиля и сценария:
+
+| Файл | Из чего выведен |
+|---|---|
+| `<робот>/description.urdf` | входное описание плюс блок `ros2_control` из контракта |
+| `<робот>/controllers.yaml` | тип действия, режим управления, `state_rate_hz`, `joint_order` |
+| `world.sdf` | сценарий; шаг физики — из наибольшей частоты состояния |
+| `bringup.launch.xml` | состав сценария, позы, идентификаторы роботов |
+| `view.rviz` | корневые звенья описаний и префиксы систем отсчёта |
+| `manifest.json` | чем порождено, из чего и при каком `contract_id` |
+
+**Кинематику платформа не сочиняет.** `description.urdf` в профиле и
+`world.file` в сценарии — вход: генератор их не перезаписывает, а валидатор
+сверяет описание с профилем ([ADR-0009](docs/decisions/0009-generators-do-not-author-kinematics.md)).
+Отсюда правила `urdf.*`: сустав, переименованный в модели и не переименованный в
+профиле; сустав, который контракт называет управляемым, а модель заваривает;
+лимит профиля шире физического предела. Единицы при сверке переводятся — URDF по
+спецификации в радианах, а контракт может объявлять градусы.
+
+Генерация детерминирована, поэтому `--check` отвечает на вопрос «артефакты
+отстали от профиля?» без запуска чего бы то ни было
+([ADR-0010](docs/decisions/0010-generated-artifacts.md)). Выходной каталог не
+версионируется: производную величину рядом с исходной не хранят.
+
+Запуск сцены целиком — `heron sim run` без `--dry-run`; он требует Linux с ROS 2
+Jazzy и Gazebo Harmonic, то есть окружения фазы 0. Сцену, не прошедшую валидатор,
+бэкенд не строит вовсе ([ADR-0011](docs/decisions/0011-sim-backend-runs-processes.md)).
 
 ## Проверка
 

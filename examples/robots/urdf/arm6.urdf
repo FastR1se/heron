@@ -1,0 +1,266 @@
+<?xml version="1.0"?>
+<!--
+  Описание кинематики опорного манипулятора arm6.
+
+  Это ВХОД платформы, а не её выход (ADR-0009): генераторы вклеивают сюда блок
+  ros2_control и плагин симулятора, но ни одного звена, ни одной массы и ни
+  одной оси не пишут. Файл правит человек или выдаёт производитель.
+
+  Геометрия — примитивы, без мешей: пример должен грузиться в мир без внешних
+  файлов. Пределы суставов шире, чем в профиле, и это не оплошность: лимиты
+  профиля — предохранительная рамка (раздел 12), она обязана быть уже модели.
+
+  Суставы захвата (finger_*) намеренно не входят в contract.joint_order:
+  контракт описывает вектор действия политики — шесть суставов руки, — а захват
+  объявлен возможностью gripper.binary и управляется адаптером отдельно.
+  Валидатор сообщает об этом предупреждением urdf.joint_not_in_contract, и это
+  ожидаемое предупреждение, а не дефект примера.
+-->
+<robot name="arm6">
+
+  <material name="metal">
+    <color rgba="0.65 0.68 0.72 1.0"/>
+  </material>
+  <material name="accent">
+    <color rgba="0.85 0.45 0.20 1.0"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0.06"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.0056" ixy="0" ixz="0" iyy="0.0056" iyz="0" izz="0.0064"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.06"/>
+      <geometry><cylinder radius="0.08" length="0.12"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.06"/>
+      <geometry><cylinder radius="0.08" length="0.12"/></geometry>
+    </collision>
+  </link>
+
+  <link name="link1">
+    <inertial>
+      <origin xyz="0 0 0.09"/>
+      <mass value="1.5"/>
+      <inertia ixx="0.0055" ixy="0" ixz="0" iyy="0.0055" iyz="0" izz="0.0027"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.09"/>
+      <geometry><cylinder radius="0.06" length="0.18"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.09"/>
+      <geometry><cylinder radius="0.06" length="0.18"/></geometry>
+    </collision>
+  </link>
+
+  <link name="link2">
+    <inertial>
+      <origin xyz="0 0 0.15"/>
+      <mass value="1.5"/>
+      <inertia ixx="0.0117" ixy="0" ixz="0" iyy="0.0117" iyz="0" izz="0.0009"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.15"/>
+      <geometry><box size="0.06 0.06 0.30"/></geometry>
+      <material name="accent"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.15"/>
+      <geometry><box size="0.06 0.06 0.30"/></geometry>
+    </collision>
+  </link>
+
+  <link name="link3">
+    <inertial>
+      <origin xyz="0 0 0.125"/>
+      <mass value="1.2"/>
+      <inertia ixx="0.0065" ixy="0" ixz="0" iyy="0.0065" iyz="0" izz="0.0005"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.125"/>
+      <geometry><box size="0.05 0.05 0.25"/></geometry>
+      <material name="accent"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.125"/>
+      <geometry><box size="0.05 0.05 0.25"/></geometry>
+    </collision>
+  </link>
+
+  <link name="link4">
+    <inertial>
+      <origin xyz="0 0 0.06"/>
+      <mass value="0.8"/>
+      <inertia ixx="0.0014" ixy="0" ixz="0" iyy="0.0014" iyz="0" izz="0.0008"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.06"/>
+      <geometry><cylinder radius="0.045" length="0.12"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.06"/>
+      <geometry><cylinder radius="0.045" length="0.12"/></geometry>
+    </collision>
+  </link>
+
+  <link name="link5">
+    <inertial>
+      <origin xyz="0 0 0.05"/>
+      <mass value="0.6"/>
+      <inertia ixx="0.0007" ixy="0" ixz="0" iyy="0.0007" iyz="0" izz="0.0005"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.04" length="0.10"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.04" length="0.10"/></geometry>
+    </collision>
+  </link>
+
+  <link name="link6">
+    <inertial>
+      <origin xyz="0 0 0.04"/>
+      <mass value="0.4"/>
+      <inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.0003" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.04"/>
+      <geometry><cylinder radius="0.035" length="0.08"/></geometry>
+      <material name="accent"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.04"/>
+      <geometry><cylinder radius="0.035" length="0.08"/></geometry>
+    </collision>
+  </link>
+
+  <link name="tool_link">
+    <inertial>
+      <origin xyz="0 0 0.02"/>
+      <mass value="0.2"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.02"/>
+      <geometry><box size="0.08 0.04 0.04"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02"/>
+      <geometry><box size="0.08 0.04 0.04"/></geometry>
+    </collision>
+  </link>
+
+  <link name="finger_left_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.02"/>
+      <geometry><box size="0.01 0.02 0.04"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02"/>
+      <geometry><box size="0.01 0.02 0.04"/></geometry>
+    </collision>
+  </link>
+
+  <link name="finger_right_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.02"/>
+      <geometry><box size="0.01 0.02 0.04"/></geometry>
+      <material name="metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02"/>
+      <geometry><box size="0.01 0.02 0.04"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="joint0" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.12"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.20" upper="3.20" effort="150" velocity="2.5"/>
+  </joint>
+
+  <joint name="joint1" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0 0 0.18"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.15" upper="2.15" effort="150" velocity="2.5"/>
+  </joint>
+
+  <joint name="joint2" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="0 0 0.30"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.85" upper="2.85" effort="100" velocity="3.5"/>
+  </joint>
+
+  <joint name="joint3" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0 0 0.25"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.20" upper="3.20" effort="50" velocity="3.5"/>
+  </joint>
+
+  <joint name="joint4" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0 0 0.12"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.15" upper="2.15" effort="50" velocity="3.5"/>
+  </joint>
+
+  <joint name="joint5" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="0 0 0.10"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.30" upper="6.30" effort="30" velocity="3.5"/>
+  </joint>
+
+  <joint name="tool_joint" type="fixed">
+    <parent link="link6"/>
+    <child link="tool_link"/>
+    <origin xyz="0 0 0.08"/>
+  </joint>
+
+  <joint name="finger_left_joint" type="prismatic">
+    <parent link="tool_link"/>
+    <child link="finger_left_link"/>
+    <origin xyz="0 0.02 0.04"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.04" effort="20" velocity="0.1"/>
+  </joint>
+
+  <joint name="finger_right_joint" type="prismatic">
+    <parent link="tool_link"/>
+    <child link="finger_right_link"/>
+    <origin xyz="0 -0.02 0.04"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="0.0" upper="0.04" effort="20" velocity="0.1"/>
+  </joint>
+
+</robot>

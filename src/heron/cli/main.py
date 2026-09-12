@@ -19,10 +19,14 @@ from ..core.branding import APP_TITLE, data_home, env_var, image_name, registry_
 from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
 from ..core.enums import Severity
 from ..core.loading import LoadError, load_model, read_yaml
-from ..core.models import RobotProfile
+from ..core.models import RobotProfile, Scenario
+from ..generators.bundle import build, build_profile
+from ..generators.common import Bundle, GeneratorError
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
 from ..scenario.loader import load_scenario
+from ..sim.gazebo import GazeboBackend, SimulationError
+from ..sim.process import PlanningLauncher
 from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
@@ -38,11 +42,13 @@ app = typer.Typer(
     add_completion=False,
 )
 profile_app = typer.Typer(help="Профили роботов.", no_args_is_help=True)
+sim_app = typer.Typer(help="Симуляция: сборка мира и запуск сцены.", no_args_is_help=True)
 contract_app = typer.Typer(help="Контракты: идентичность и сверка.", no_args_is_help=True)
 skill_app = typer.Typer(help="Библиотека навыков.", no_args_is_help=True)
 app.add_typer(profile_app, name="profile")
 app.add_typer(contract_app, name="contract")
 app.add_typer(skill_app, name="skill")
+app.add_typer(sim_app, name="sim")
 
 RootsOption = Annotated[
     list[Path] | None,
@@ -118,7 +124,7 @@ def validate(
             else:
                 profile = load_model(path, RobotProfile)
                 lock = ContractLock.load(path.parent)
-                report = report.merged(check_profile(profile, lock=lock))
+                report = report.merged(check_profile(profile, lock=lock, path=path))
         except LoadError as exc:
             typer.echo(f"не читается  {exc}", err=True)
             raise typer.Exit(EXIT_UNREADABLE) from exc
@@ -129,6 +135,127 @@ def _looks_like_scenario(path: Path) -> bool:
     """A scenario has a world; a profile has a contract. One key decides."""
     data = read_yaml(path)
     return "world" in data and "contract" not in data
+
+
+# -- gen -------------------------------------------------------------------
+
+
+def _bundle_for(path: Path, roots: list[Path] | None, into: Path, backend: str | None) -> Bundle:
+    """Build the bundle a file asks for: a scenario as it is, a profile alone."""
+    if _looks_like_scenario(path):
+        scenario: Scenario = load_scenario(path)
+        return build(scenario, _registry(roots), into=into, scenario_path=path)
+    profile = load_model(path, RobotProfile)
+    return build_profile(profile, path, into=into, backend=backend)
+
+
+@app.command()
+def gen(
+    targets: Annotated[list[Path], typer.Argument(help="Файлы сценариев или профилей.")],
+    into: Annotated[Path, typer.Option("--into", help="Выходной каталог.")],
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Не писать, а сравнить с тем, что лежит."),
+    ] = False,
+    backend: Annotated[
+        str | None,
+        typer.Option("--backend", help="Бэкенд, если генерируется один профиль."),
+    ] = None,
+    roots: RootsOption = None,
+) -> None:
+    """Породить среды из профиля и сценария (ADR-0009, ADR-0010).
+
+    Кинематику платформа не сочиняет: описание — вход. Порождается то, что
+    выводимо: интерфейсы управления, конфигурация контроллеров, мир, запуск и
+    визуализация.
+    """
+    stale = 0
+    for path in targets:
+        try:
+            bundle = _bundle_for(path, roots, into, backend)
+        except (LoadError, ProfileNotFoundError) as exc:
+            typer.echo(f"не читается  {exc}", err=True)
+            raise typer.Exit(EXIT_UNREADABLE) from exc
+        except GeneratorError as exc:
+            typer.echo(f"не порождается  {exc}", err=True)
+            raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+        if check:
+            differences = bundle.differences()
+            stale += len(differences)
+            for item in differences:
+                typer.echo(f"устарело  {item}")
+            if not differences:
+                typer.echo(f"актуально  {path}: файлов {len(bundle.files)}")
+            continue
+
+        for written in bundle.write():
+            typer.echo(f"порождено  {written.relative_to(bundle.root)}")
+        typer.echo(f"\nкаталог: {bundle.root}")
+
+    if check and stale:
+        typer.echo(f"\nитого устаревших файлов: {stale}")
+        raise typer.Exit(EXIT_FOUND_ERRORS)
+
+
+# -- sim -------------------------------------------------------------------
+
+
+@sim_app.command("run")
+def sim_run(
+    scenario_file: Annotated[Path, typer.Argument(help="Файл сценария.")],
+    into: Annotated[Path, typer.Option("--into", help="Каталог порождаемых артефактов.")],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Показать команды запуска и ничего не запускать."),
+    ] = False,
+    gui: Annotated[bool, typer.Option("--gui/--headless", help="Окно симулятора.")] = True,
+    rviz: Annotated[bool, typer.Option("--rviz/--no-rviz", help="Визуализация.")] = True,
+    roots: RootsOption = None,
+) -> None:
+    """Собрать мир и запустить сцену (ADR-0011).
+
+    Сцена, не прошедшая проверку, не строится: рассогласование сред — ошибка
+    валидатора, а не странное поведение робота (инвариант 6).
+    """
+    try:
+        scenario = load_scenario(scenario_file)
+    except LoadError as exc:
+        typer.echo(f"не читается  {exc}", err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+
+    planner = PlanningLauncher() if dry_run else None
+    backend = GazeboBackend(
+        _registry(roots),
+        into=into,
+        launcher=planner,
+        scenario_path=scenario_file,
+        gui=gui,
+        rviz=rviz,
+    )
+    try:
+        world = backend.build_world(scenario)
+        backend.start()
+    except (SimulationError, GeneratorError, LoadError, ProfileNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+    typer.echo(f"мир {world.name!r} собран в {world.root}")
+    if planner is not None:
+        typer.echo("\nбудет выполнено:")
+        for command in planner.commands:
+            typer.echo("  " + " ".join(command))
+        raise typer.Exit(EXIT_OK)
+
+    typer.echo(f"запущено: {' '.join(backend.launch_command(world))}")
+    typer.echo("остановка — Ctrl+C")
+    try:
+        for process in list(backend.processes):
+            process.wait()
+    except KeyboardInterrupt:
+        typer.echo("\nостанавливаю")
+    finally:
+        backend.stop()
 
 
 # -- profile ---------------------------------------------------------------

@@ -10,6 +10,8 @@ split explicit is what stops the validator from quietly becoming a loader.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..core import capabilities as caps
 from ..core import requires as req
 from ..core.branding import DOCKER_NAMESPACE
@@ -19,6 +21,7 @@ from ..core.models import PolicyManifest, RobotProfile, Scenario, SkillSpec, sim
 from ..core.plugins import PluginError, available
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
+from .description import check_description
 from .report import Report, error, warning
 
 # --------------------------------------------------------------------------
@@ -26,8 +29,19 @@ from .report import Report, error, warning
 # --------------------------------------------------------------------------
 
 
-def check_profile(profile: RobotProfile, *, lock: ContractLock | None = None) -> Report:
-    """Everything decidable from a single profile."""
+def check_profile(
+    profile: RobotProfile,
+    *,
+    lock: ContractLock | None = None,
+    path: Path | None = None,
+) -> Report:
+    """Everything decidable from a single profile.
+
+    ``path`` is where the profile was read from. With it the description it
+    points at becomes reachable, and the rules of ``description`` join in; a
+    profile validated as a bare object is validated without them, and says so by
+    simply not reporting them.
+    """
     report = Report()
     where = f"profile:{profile.name}"
     contract = profile.contract
@@ -37,6 +51,8 @@ def check_profile(profile: RobotProfile, *, lock: ContractLock | None = None) ->
     _check_observation_terms(profile, report)
     _check_image(profile, report)
     _check_adapters(profile, report)
+    if path is not None:
+        report.extend(check_description(profile, path).findings)
 
     if lock is not None:
         previous = lock.undeclared_change(profile.name, contract)
@@ -311,7 +327,8 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
     for robot in scenario.robots:
         spot = f"{where}.robots.{robot.id}"
         try:
-            profile = registry.load(robot.profile)
+            source = registry.source(robot.profile)
+            profile = source.profile
         except ProfileNotFoundError as exc:
             report.add(
                 error(
@@ -343,7 +360,7 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
 
         if profile.name not in checked:
             checked.add(profile.name)
-            report.extend(check_profile(profile).findings)
+            report.extend(check_profile(profile, path=source.path).findings)
 
     learners = scenario.learners
     if len(learners) > 1:

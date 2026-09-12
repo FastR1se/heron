@@ -7,5 +7,5 @@ plus two files. Inside the package every import is relative for the same reason.
 
 from .core.branding import APP_TITLE
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["APP_TITLE", "__version__"]

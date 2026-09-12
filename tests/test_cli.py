@@ -131,3 +131,112 @@ def test_skill_list_includes_builtin() -> None:
     result = runner.invoke(app, ["skill", "list"])
     assert result.exit_code == EXIT_OK
     assert "hold" in result.stdout
+
+
+# -- gen and sim -----------------------------------------------------------
+
+
+@pytest.fixture
+def scene(tmp_path: Path) -> Path:
+    """A profile, its description and a scenario, all in one directory."""
+    from conftest import write_profile, write_urdf
+    from heron.core.models import AdapterSpec
+
+    profile = make_profile(
+        name="arm",
+        description={"urdf": "urdf/arm.urdf"},
+        adapters={"sim.gazebo": AdapterSpec(plugin="ros2_control")},
+    )
+    write_urdf(tmp_path, "arm", list(profile.contract.joint_order))
+    write_profile(tmp_path, profile)
+
+    path = tmp_path / "scene.yaml"
+    path.write_text(
+        "schema_version: 1\nname: scene\nworld: {backend: gazebo}\n"
+        "robots:\n  - {id: arm1, profile: arm, role: scripted}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_gen_writes_the_bundle(scene: Path, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    result = runner.invoke(app, ["gen", str(scene), "--into", str(out), "-R", str(tmp_path)])
+
+    assert result.exit_code == EXIT_OK, result.stdout
+    assert (out / "bringup.launch.xml").is_file()
+    assert (out / "arm1" / "description.urdf").is_file()
+
+
+def test_gen_check_passes_on_fresh_artifacts(scene: Path, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    runner.invoke(app, ["gen", str(scene), "--into", str(out), "-R", str(tmp_path)])
+
+    result = runner.invoke(
+        app, ["gen", str(scene), "--into", str(out), "--check", "-R", str(tmp_path)]
+    )
+    assert result.exit_code == EXIT_OK
+    assert "актуально" in result.stdout
+
+
+def test_gen_check_fails_on_stale_artifacts(scene: Path, tmp_path: Path) -> None:
+    """The cheap CI check of ADR-0010: artifacts that fell behind the profile."""
+    out = tmp_path / "out"
+    runner.invoke(app, ["gen", str(scene), "--into", str(out), "-R", str(tmp_path)])
+    (out / "arm1" / "controllers.yaml").write_text("подменено", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["gen", str(scene), "--into", str(out), "--check", "-R", str(tmp_path)]
+    )
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "устарело" in result.stdout
+
+
+def test_gen_of_a_lone_profile_needs_no_scenario(tmp_path: Path, scene: Path) -> None:
+    result = runner.invoke(
+        app, ["gen", str(tmp_path / "arm.yaml"), "--into", str(tmp_path / "solo")]
+    )
+    assert result.exit_code == EXIT_OK, result.stdout
+    assert (tmp_path / "solo" / "arm" / "controllers.yaml").is_file()
+
+
+def test_gen_reports_an_unreadable_input_as_such(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["gen", str(tmp_path / "absent.yaml"), "--into", str(tmp_path)])
+    assert result.exit_code == EXIT_UNREADABLE
+
+
+def test_sim_run_dry_shows_the_command_and_starts_nothing(scene: Path, tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["sim", "run", str(scene), "--into", str(tmp_path / "out"), "--dry-run",
+         "-R", str(tmp_path)],
+    )
+    assert result.exit_code == EXIT_OK, result.stdout
+    assert "ros2 launch" in result.stdout
+
+
+def test_sim_run_refuses_a_scene_that_does_not_validate(tmp_path: Path) -> None:
+    from conftest import write_profile, write_urdf
+    from heron.core.models import AdapterSpec
+
+    profile = make_profile(
+        name="arm",
+        description={"urdf": "urdf/arm.urdf"},
+        adapters={"sim.dummy": AdapterSpec(plugin="dummy")},
+    )
+    write_urdf(tmp_path, "arm", list(profile.contract.joint_order))
+    write_profile(tmp_path, profile)
+    path = tmp_path / "scene.yaml"
+    path.write_text(
+        "schema_version: 1\nname: scene\nworld: {backend: gazebo}\n"
+        "robots:\n  - {id: arm1, profile: arm, role: scripted}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["sim", "run", str(path), "--into", str(tmp_path / "out"), "--dry-run",
+         "-R", str(tmp_path)],
+    )
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "scenario.backend_adapter_missing" in result.output

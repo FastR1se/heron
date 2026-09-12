@@ -4,7 +4,7 @@ schema_version: 1
 name: rest_arm
 
 description:
-  urdf: urdf/rest_arm.urdf.xacro
+  urdf: urdf/rest_arm.urdf
 
 contract:
   revision: 1

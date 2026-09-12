@@ -1,6 +1,6 @@
 [project]
 name = "heron"
-version = "0.1.0"
+version = "0.2.0"
 description = "Modelling platform for heterogeneous robotic systems"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,6 +34,9 @@ heron = "heron.cli.main:app"
 # packages use. The core has no private path for its own adapters.
 [project.entry-points."heron.adapters"]
 dummy = "heron.adapters.dummy:DummyAdapter"
+
+[project.entry-points."heron.sim_backends"]
+gazebo = "heron.sim.gazebo:GazeboBackend"
 
 [build-system]
 requires = ["hatchling"]

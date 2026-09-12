@@ -4,8 +4,7 @@ schema_version: 1
 name: arm6
 
 description:
-  urdf: urdf/arm6.urdf.xacro
-  mesh_dir: meshes/
+  urdf: urdf/arm6.urdf
 
 contract:
   revision: 1

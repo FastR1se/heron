@@ -8,6 +8,12 @@ than plausible: a stub that looks finished is a stub that ships unread.
 The generated adapter skeleton implements the whole ``ControlAdapter`` protocol,
 ``emergency_stop`` included, because section 12 makes it mandatory and an
 omission here would propagate into every robot added this way.
+
+A skeleton description is written too. It is a starting **input**, not an output
+of the generators: the platform never rewrites it again and from then on only
+compares it with the profile (ADR-0009). Without one the stub would not start in
+any world, and its owner would be left facing an empty ``description.urdf``,
+which is where a stub stops helping.
 """
 
 from __future__ import annotations
@@ -24,8 +30,7 @@ schema_version: 1
 name: {name}
 
 description:
-  urdf: urdf/{name}.urdf.xacro   # TODO: путь к описанию кинематики
-  mesh_dir: meshes/
+  urdf: urdf/{name}.urdf   # заготовка описания; замените на настоящую модель
 
 # Контракт — соглашение о представлении данных между средами.
 # Его идентификатор вычисляется из содержимого; revision объявляется вручную.
@@ -129,6 +134,71 @@ class {klass}:
 '''
 
 
+URDF_TEMPLATE = """<?xml version="1.0"?>
+<!--
+  Заготовка описания кинематики {name}: {dof} суставов, примитивы вместо мешей.
+
+  Это ВХОД платформы, а не её выход (ADR-0009). Порождена один раз, чтобы робот
+  из заготовки можно было поставить в мир; дальше файл ваш — замените звенья,
+  массы и пределы на настоящие или на модель производителя. Платформа больше
+  никогда его не перезапишет, она будет только сверять его с профилем.
+
+  Пределы здесь шире, чем в заготовке профиля, и так и должно быть: лимиты
+  профиля — предохранительная рамка, она обязана быть уже модели (раздел 12).
+-->
+<robot name="{name}">
+  <link name="base_link">
+    <inertial>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.05" length="0.08"/></geometry>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.05" length="0.08"/></geometry>
+    </collision>
+  </link>
+{links}</robot>
+"""
+
+URDF_LINK = """  <link name="link{index}">
+    <inertial>
+      <origin xyz="0 0 0.05"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.03" length="0.10"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.05"/>
+      <geometry><cylinder radius="0.03" length="0.10"/></geometry>
+    </collision>
+  </link>
+  <joint name="joint{index}" type="revolute">
+    <parent link="{parent}"/>
+    <child link="link{index}"/>
+    <origin xyz="0 0 {offset}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.20" upper="3.20" effort="50" velocity="2.0"/>
+  </joint>
+"""
+
+
+def _skeleton_urdf(name: str, dof: int) -> str:
+    """A chain of ``dof`` revolute joints named like the stub profile's."""
+    links = []
+    parent = "base_link"
+    for index in range(dof):
+        links.append(
+            URDF_LINK.format(index=index, parent=parent, offset="0.08" if index == 0 else "0.10")
+        )
+        parent = f"link{index}"
+    return URDF_TEMPLATE.format(name=name, dof=dof, links="".join(links))
+
+
 def _class_name(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_")) + "Adapter"
 
@@ -143,7 +213,8 @@ def write_stub(name: str, into: Path, dof: int = 6) -> list[Path]:
     target = Path(into) / name
     profile_path = target / "profile.yaml"
     adapter_path = target / "adapter.py"
-    for path in (profile_path, adapter_path):
+    urdf_path = target / "urdf" / f"{name}.urdf"
+    for path in (profile_path, adapter_path, urdf_path):
         if path.exists():
             raise FileExistsError(f"{path} уже существует; заготовка не перезаписывает файлы")
 
@@ -173,4 +244,6 @@ def write_stub(name: str, into: Path, dof: int = 6) -> list[Path]:
         ),
         encoding="utf-8",
     )
-    return [profile_path, adapter_path]
+    urdf_path.parent.mkdir(parents=True, exist_ok=True)
+    urdf_path.write_text(_skeleton_urdf(name, dof), encoding="utf-8")
+    return [profile_path, adapter_path, urdf_path]

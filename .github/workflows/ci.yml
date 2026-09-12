@@ -86,3 +86,15 @@ jobs:
           uv run heron capabilities
           uv run heron validate examples/robots/arm6.yaml examples/robots/rest_arm.yaml
           uv run heron validate examples/scenarios/bench.yaml --registry examples/robots
+          uv run heron validate examples/scenarios/table.yaml --registry examples/robots
+
+      # Фаза 2: генераторы не требуют ни симулятора, ни ROS 2 — значит,
+      # порождение сред проверяется тем же прогоном, что и установка ядра.
+      - name: Среды порождаются и повторно порождаются одинаково
+        run: |
+          uv run heron gen examples/scenarios/table.yaml --into generated/table --registry examples/robots
+          uv run heron gen examples/scenarios/table.yaml --into generated/table --check --registry examples/robots
+
+      - name: Команда запуска сцены строится
+        run: |
+          uv run heron sim run examples/scenarios/table.yaml --into generated/table --registry examples/robots --dry-run
