@@ -9,6 +9,8 @@ that, and no comment in them should suggest otherwise.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from conftest import make_contract, make_profile
@@ -40,7 +42,9 @@ def connected(
     profile = profile or make_profile()
     transport = RecordingTransport()
     adapter = Ros2ControlAdapter(transport)
-    adapter.connect(profile, {"namespace": namespace, **config})
+    # A short link deadline: this transport answers instantly, so waiting the
+    # real one would spend ten seconds discovering nothing.
+    adapter.connect(profile, {"namespace": namespace, "link_timeout": 0.05, **config})
     topic = names.state_topic(namespace)
     for index in range(states):
         transport.deliver_state(
@@ -159,10 +163,39 @@ def test_state_that_stops_arriving_keeps_its_timestamp() -> None:
     assert second.timestamp == first.timestamp
 
 
-def test_the_very_first_read_without_state_is_an_error() -> None:
+def test_a_link_nobody_publishes_on_says_so() -> None:
+    """Two failures, two fixes: nobody publishes, or nothing arrives."""
     adapter, _ = connected(states=0)
-    with pytest.raises(StateMismatchError, match="не пришло"):
+    with pytest.raises(StateMismatchError, match="никто не публикует"):
         adapter.read_state()
+
+
+def test_a_link_that_publishes_but_delivers_nothing_says_that_instead() -> None:
+    adapter, transport = connected(states=0)
+    transport.publishers[names.state_topic("arm1")] = 1
+
+    with pytest.raises(StateMismatchError, match="не доходят"):
+        adapter.read_state()
+
+
+def test_the_first_read_waits_for_the_link_and_later_ones_do_not() -> None:
+    """Establishing a link is not the same as using one (ADR-0016)."""
+    profile = make_profile()
+    transport = RecordingTransport()
+    adapter = Ros2ControlAdapter(transport)
+    adapter.connect(profile, {"namespace": "arm1", "link_timeout": 5.0})
+    transport.deliver_state(
+        names.state_topic("arm1"),
+        stamp=1.0,
+        names_=JOINTS,
+        position=[0.0] * 3,
+        velocity=[0.0] * 3,
+    )
+
+    first = time.monotonic()
+    adapter.read_state()
+    adapter.read_state()  # nothing queued: must not wait the link deadline again
+    assert time.monotonic() - first < 1.0
 
 
 # -- sending commands ------------------------------------------------------

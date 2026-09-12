@@ -26,6 +26,7 @@ in the right shape is how a position lands in a velocity interface.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Final
 
 from ..core.capabilities import Capability, parse_set
@@ -33,7 +34,7 @@ from ..core.enums import ActionType, ControlMode
 from ..core.models import Limits, RobotProfile
 from ..core.types import Command, RobotState
 from ..ros2 import names
-from ..ros2.transport import Publication, RclpyTransport, Transport
+from ..ros2.transport import Publication, RclpyTransport, Reading, Transport
 
 NAMESPACE_PARAM: Final = "namespace"
 """Configuration key naming the robot's namespace.
@@ -49,6 +50,20 @@ DEFAULT_POLL_S: Final = 0.1
 Not a timeout on the robot: the executor decides when missing state becomes a
 stop (ADR-0015). This is only how long a single read blocks, and it is short so
 that a command loop keeps its period even while state is late."""
+
+DEFAULT_LINK_S: Final = 10.0
+"""How long the *first* read waits for the link to come up (ADR-0016).
+
+Establishing a link is not the same as using one. A subscription created a
+moment ago has not been matched with its publisher yet: discovery takes as long
+as it takes, routinely longer than one command period and occasionally seconds.
+Waiting one period for the first state and declaring the robot silent is how a
+working scene reads as a broken one.
+
+This is a deadline on a condition, not a pause: the wait ends the moment a state
+arrives. A generated sleep would be a guess that breaks on another machine --
+the same reason the generated launch waits on its predecessors rather than on a
+timer."""
 
 
 class NotConnectedError(RuntimeError):
@@ -80,6 +95,7 @@ class Ros2ControlAdapter:
         self._limits: Limits = Limits()
         self._enforce_limits = True
         self._poll_s = DEFAULT_POLL_S
+        self._link_s = DEFAULT_LINK_S
         self._state_topic = ""
         self._command_topic = ""
         self._command_message = ""
@@ -109,6 +125,7 @@ class Ros2ControlAdapter:
         self._limits = profile.limits
         self._enforce_limits = bool(config.get("enforce_limits", True))
         self._poll_s = float(config.get("poll_timeout", DEFAULT_POLL_S))
+        self._link_s = float(config.get("link_timeout", DEFAULT_LINK_S))
         self._check_limit_widths(profile.contract.dof)
 
         plane = names.control_plane(self._namespace, profile)
@@ -137,21 +154,59 @@ class Ros2ControlAdapter:
         Returns the previous reading unchanged when nothing new arrived, rather
         than blocking or inventing one. Staleness is then visible as a timestamp
         that stopped moving, which is what the executor's watchdog watches.
+
+        The first read is the exception: it waits for the link to come up
+        (ADR-0016), because until then there is no previous reading to be stale.
         """
         profile = self._require_connected()
-        reading = self._link().poll(self._state_topic, self._poll_s)
+        reading = (
+            self._await_link() if self._last is None
+            else self._link().poll(self._state_topic, self._poll_s)
+        )
         if reading is None:
-            if self._last is None:
-                raise StateMismatchError(
-                    f"{self._state_topic}: состояние не пришло за {self._poll_s:g} с. "
-                    f"Проверьте, что контроллеры запущены: "
-                    f"ros2 control list_controllers -c {self._namespace}/controller_manager"
-                )
-            return self._last
+            return self._last if self._last is not None else self._no_state()
 
         state = _reindex(reading.fields, reading.stamp, profile, self._state_topic)
         self._last = state
         return state
+
+    def _await_link(self) -> Reading | None:
+        """Poll until the first state arrives or the link deadline passes."""
+        link = self._link()
+        deadline = time.monotonic() + self._link_s
+        while True:
+            reading = link.poll(self._state_topic, self._poll_s)
+            if reading is not None or time.monotonic() >= deadline:
+                return reading
+
+    def _no_state(self) -> RobotState:
+        """Report a link that never came up, saying which half is missing.
+
+        "Nobody publishes" and "somebody publishes and nothing arrives" are two
+        different failures with two different fixes, and the link can tell them
+        apart. Reporting only silence would leave that to guesswork, which is
+        what this platform exists not to do.
+        """
+        publishers = self._link().publisher_count(self._state_topic)
+        if publishers == 0:
+            detail = (
+                "на этот топик никто не публикует. Проверьте, что сцена поднята и "
+                f"контроллеры запущены:\n"
+                f"    ros2 control list_controllers -c /{self._namespace}/controller_manager\n"
+                f"    ros2 topic list | grep {self._namespace}\n"
+                f"Если broadcaster активен, а топик называется иначе — разошлись "
+                f"пространства имён: сверьте с блоком control в manifest.json"
+            )
+        else:
+            detail = (
+                f"публикующих узлов: {publishers}, но сообщения не доходят. "
+                f"Обычно это несовпадение QoS или разные домены ROS_DOMAIN_ID.\n"
+                f"    ros2 topic hz {self._state_topic}\n"
+                f"    ros2 topic info {self._state_topic} --verbose"
+            )
+        raise StateMismatchError(
+            f"{self._state_topic}: состояние не пришло за {self._link_s:g} с — {detail}"
+        )
 
     def send_command(self, cmd: Command) -> None:
         profile = self._require_connected()

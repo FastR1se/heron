@@ -72,7 +72,22 @@ class Transport(Protocol):
     def publish(self, message: Publication) -> None: ...
 
     def poll(self, topic: str, timeout: float) -> Reading | None:
-        """The next message on this topic, or ``None`` if none arrived in time."""
+        """The next message on this topic, or ``None`` if none arrived in time.
+
+        **Blocks for up to ``timeout`` seconds.** Part of the contract, not an
+        implementation detail: a caller waiting for a link to come up polls
+        against a deadline, and a transport that answers instantly turns that
+        wait into a busy loop.
+        """
+
+    def publisher_count(self, topic: str) -> int:
+        """How many publishers this link can currently see on a topic.
+
+        Not a convenience: it is what separates "nobody is publishing" from
+        "somebody is publishing and the messages do not reach us". Those two
+        have different causes and different fixes, and an adapter that reported
+        only silence would make the reader guess between them (ADR-0016).
+        """
 
     def close(self) -> None: ...
 
@@ -122,12 +137,22 @@ class RecordingTransport:
     It is not a simulator and does not pretend to be one: it moves no robot and
     integrates nothing. Feeding a reading is the caller's job, and a test that
     wants a robot that responds says so in the test.
+
+    The one part of the ``Transport`` contract it cannot honour is blocking:
+    everything here is in-process and answers at once. A caller that waits
+    against a deadline should therefore shorten that deadline in a test, rather
+    than spend it a hundred thousand times over.
     """
 
     published: list[Publication] = field(default_factory=list)
     advertised: dict[str, str] = field(default_factory=dict)
     subscribed: dict[str, str] = field(default_factory=dict)
     queues: dict[str, deque[Reading]] = field(default_factory=dict)
+    publishers: dict[str, int] = field(default_factory=dict)
+    """Publishers this link pretends to see, per topic. Set by ``deliver``, and
+    settable by hand for the case a test needs: a topic somebody publishes on
+    whose messages never arrive."""
+
     closed: bool = False
 
     def advertise(self, topic: str, message_type: str) -> None:
@@ -151,6 +176,9 @@ class RecordingTransport:
             return None
         return queue.popleft()
 
+    def publisher_count(self, topic: str) -> int:
+        return self.publishers.get(topic, 0)
+
     def close(self) -> None:
         self.closed = True
 
@@ -158,6 +186,7 @@ class RecordingTransport:
 
     def deliver(self, reading: Reading) -> None:
         self.queues.setdefault(reading.topic, deque()).append(reading)
+        self.publishers.setdefault(reading.topic, 1)
 
     def deliver_state(
         self,
@@ -204,6 +233,7 @@ class RclpyTransport:
         self._node_name = node_name
         self._use_sim_time = use_sim_time
         self._node: Any = None
+        self._executor: Any = None
         self._owns_context = False
         self._publishers: dict[str, Any] = {}
         self._latest: dict[str, Reading] = {}
@@ -232,10 +262,16 @@ class RclpyTransport:
 
     def poll(self, topic: str, timeout: float) -> Reading | None:
         self._latest.pop(topic, None)
-        self._rclpy.spin_once(self._node, timeout_sec=timeout)
+        self._executor.spin_once(timeout_sec=timeout)
         return self._latest.get(topic)
 
+    def publisher_count(self, topic: str) -> int:
+        return int(self._node.count_publishers(topic))
+
     def close(self) -> None:
+        if self._executor is not None:
+            self._executor.shutdown()
+            self._executor = None
         if self._node is not None:
             self._node.destroy_node()
             self._node = None
@@ -254,6 +290,13 @@ class RclpyTransport:
         self._node.set_parameters(
             [parameter("use_sim_time", parameter.Type.BOOL, self._use_sim_time)]
         )
+        # One executor for the life of the link, not one per poll. A fresh
+        # executor per call rebuilds its wait set every time, and a subscription
+        # whose wait set is rebuilt between two messages can miss the one that
+        # arrived in between -- which looks exactly like a robot that publishes
+        # nothing (ADR-0016).
+        self._executor = _import_ros2("rclpy.executors").SingleThreadedExecutor()
+        self._executor.add_node(self._node)
 
 
 def _import_ros2(module: str) -> Any:
