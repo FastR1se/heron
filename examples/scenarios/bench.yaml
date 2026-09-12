@@ -1,0 +1,15 @@
+# Сценарий без симулятора: проверка цепочки на dummy-двойнике.
+# Один владелец физики — здесь им объявлен бэкенд dummy (ADR-0002).
+schema_version: 1
+name: bench
+
+world:
+  backend: dummy
+
+robots:
+  - {id: arm1, profile: arm6, pose: [0.0, 0.0, 0.8], role: learner}
+  - {id: arm2, profile: rest_arm, pose: [1.0, 0.0, 0.8], role: static}
+
+task:
+  skill: hold
+  duration: 0.5

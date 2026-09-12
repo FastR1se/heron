@@ -1,0 +1,36 @@
+# Второй класс интерфейса: манипулятор по сетевому API.
+# Тот же профиль, другой режим управления — и поток команд здесь неисполним.
+schema_version: 1
+name: rest_arm
+
+description:
+  urdf: urdf/rest_arm.urdf.xacro
+
+contract:
+  revision: 1
+  joint_order: [j1, j2, j3, j4]
+  angle_unit: deg
+  state_rate_hz: 20
+  command_rate_hz: 2
+  observation:
+    - {type: joint_pos, scale: 1.0}
+  action:
+    type: joint_position
+
+capabilities: [arm.joint_position]
+control_mode: command
+access_levels: []
+
+limits:
+  joint_position:
+    min: [-180.0, -90.0, -90.0, -180.0]
+    max: [180.0, 90.0, 90.0, 180.0]
+
+adapters:
+  sim.dummy:
+    plugin: dummy
+  real:
+    plugin: rest_arm.adapter:RestArmAdapter
+    params: {host: "http://10.10.10.20:8081"}
+
+skills: []

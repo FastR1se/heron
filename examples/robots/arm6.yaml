@@ -1,0 +1,44 @@
+# Опорный пример: манипулятор со стандартным путём ros2_control.
+# Живёт в examples/, а не в ядре: удаление этого каталога ничего не ломает.
+schema_version: 1
+name: arm6
+
+description:
+  urdf: urdf/arm6.urdf.xacro
+  mesh_dir: meshes/
+
+contract:
+  revision: 1
+  joint_order: [joint0, joint1, joint2, joint3, joint4, joint5]
+  angle_unit: rad
+  state_rate_hz: 100
+  command_rate_hz: 50
+  observation:
+    - {type: joint_pos, scale: 1.0}
+    - {type: joint_vel, scale: 0.05}
+  action:
+    type: joint_position
+    clip: [-1.0, 1.0]
+
+capabilities: [arm.joint_position, arm.cartesian, gripper.binary]
+control_mode: streaming
+access_levels: []
+
+limits:
+  joint_position:
+    min: [-3.14, -2.09, -2.79, -3.14, -2.09, -6.28]
+    max: [3.14, 2.09, 2.79, 3.14, 2.09, 6.28]
+  joint_velocity:
+    max: [2.0, 2.0, 3.0, 3.0, 3.0, 3.0]
+  cartesian_velocity_max: 0.25
+  gripper_width_max: 0.08
+
+adapters:
+  sim.dummy:
+    plugin: dummy
+  sim.gazebo:
+    plugin: ros2_control
+    params: {controller: joint_trajectory_controller}
+
+skills: [hold]
+image: robot-arm:latest

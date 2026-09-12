@@ -34,3 +34,7 @@ desktop.ini
 # Редакторы
 .idea/
 .vscode/
+
+# Локальные кэши инструментов: на C места нет (RULES.md)
+/.uv-cache/
+/.uv-python/

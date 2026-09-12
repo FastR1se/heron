@@ -1,0 +1,71 @@
+[project]
+name = "heron"
+version = "0.1.0"
+description = "Modelling platform for heterogeneous robotic systems"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Core installs without vendor dependencies (ARCHITECTURE.md, section 10).
+# Anything that pulls in a simulator, a robot SDK or a training framework
+# belongs to an optional group below, never here.
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+sim = ["mujoco>=3.1"]
+onnx = ["onnxruntime>=1.18"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-pyyaml",
+]
+
+[project.scripts]
+# The command name repeats the package name: renaming touches this file by
+# design (section 17, step 2 of the rename procedure).
+heron = "heron.cli.main:app"
+
+# Built-in plugins are registered through the same entry points third-party
+# packages use. The core has no private path for its own adapters.
+[project.entry-points."heron.adapters"]
+dummy = "heron.adapters.dummy:DummyAdapter"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/heron"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+# RUF001/RUF002 guard against homoglyphs sneaking into ASCII text. Here messages
+# addressed to a human are Russian by project rule (CLAUDE.md), so the rule fires
+# on every one of them and reports nothing real.
+ignore = ["RUF001", "RUF002"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["heron"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["heron"]
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
