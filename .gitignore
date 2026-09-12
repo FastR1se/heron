@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Инструменты
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Артефакты прогонов: хранилище версионирует их само, в git они не попадают.
+# Медиа для записки (docs/media) — исключение, они версионируются.
+/store/
+/outputs/
+/artifacts/
+*.mcap
+*.npz
+*.onnx
+*.ckpt
+*.pt
+
+# Среда и ОС
+.env
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Редакторы
+.idea/
+.vscode/

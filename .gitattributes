@@ -1,0 +1,19 @@
+# Разработка на Windows, тестирование на Linux: в репозитории всегда LF.
+* text=auto eol=lf
+
+# Скрипты разворота исполняются на Linux — CRLF ломает shebang.
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Форматы, которые git не должен трогать.
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.mp4   binary
+*.npz   binary
+*.mcap  binary
+*.onnx  binary
+*.usd   binary
+*.usda  text eol=lf
+*.dae   binary
+*.stl   binary
