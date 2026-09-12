@@ -1,0 +1,88 @@
+# CI гоняет всё, кроме Isaac и железа (ARCHITECTURE.md, раздел 13).
+# Симуляторы здесь не запускаются: цепочка проверяется на dummy-адаптере,
+# и это не упрощение для CI, а то же самое, что делает человек локально.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Платформа Linux, разработка на Windows: важно, чтобы сообщения на русском
+  # не ломали вывод раннера.
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  checks:
+    name: Тесты, типы, линтер
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Поставить ядро с dev-зависимостями
+        run: |
+          uv venv --python 3.11
+          uv pip install -e ".[dev]"
+
+      - name: Линтер
+        run: uv run ruff check src tests
+
+      - name: Типы
+        run: uv run mypy
+
+      - name: Тесты
+        run: uv run pytest -v
+
+  core-without-robots:
+    name: Инвариант 1 — ядро без роботов
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Проверка из CLAUDE.md выполняется, а не декларируется: удаляем профили
+      # роботов целиком и убеждаемся, что ядро собирается и проходит тесты.
+      - name: Удалить примеры роботов
+        run: rm -rf examples
+
+      - name: Поставить ядро
+        run: |
+          uv venv --python 3.11
+          uv pip install -e ".[dev]"
+
+      - name: Тесты ядра
+        run: uv run pytest
+
+  core-without-vendors:
+    name: Ядро ставится без вендорских зависимостей
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Раздел 10: ядро ставится без симуляторов, SDK и фреймворков обучения.
+      # Ставим без единой дополнительной группы и проверяем, что CLI работает.
+      - name: Поставить только ядро
+        run: |
+          uv venv --python 3.11
+          uv pip install -e .
+
+      - name: CLI отвечает
+        run: |
+          uv run heron version
+          uv run heron capabilities
+          uv run heron validate examples/robots/arm6.yaml examples/robots/rest_arm.yaml
+          uv run heron validate examples/scenarios/bench.yaml --registry examples/robots
