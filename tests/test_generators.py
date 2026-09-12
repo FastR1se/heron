@@ -372,3 +372,33 @@ def test_a_fresh_stub_generates_its_environments(tmp_path: Path) -> None:
 
     assert (tmp_path / "out" / "some_robot" / "controllers.yaml").is_file()
     assert (tmp_path / "out" / "bringup.launch.xml").is_file()
+
+
+def test_free_text_parameters_declare_their_type(tmp_path: Path) -> None:
+    """Regression, found by a real run: the launch frontend guesses parameter
+    types with a YAML loader, and a robot description is not YAML. The generated
+    header is enough to break it -- "Источник: файл.urdf" reads as a mapping --
+    and the launch then fails to parse before starting anything."""
+    _profile(tmp_path)
+    bundle = build(_scenario(), Registry([tmp_path]), into=tmp_path / "out")
+    launch = next(f for f in bundle.files if str(f.path).endswith(".launch.xml")).content
+
+    assert 'name="robot_description" value="$(command' in launch
+    text_params = ("robot_description", "frame_prefix")
+    for line in launch.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("<param") and any(name in stripped for name in text_params):
+            assert 'type="str"' in stripped, stripped
+
+
+def test_the_generated_description_is_not_valid_yaml(tmp_path: Path) -> None:
+    """The other half of the regression: proof that the type declaration is
+    load-bearing rather than decorative."""
+    _profile(tmp_path)
+    bundle = build(_scenario(), Registry([tmp_path]), into=tmp_path / "out")
+    description = next(
+        f for f in bundle.files if str(f.path).endswith("description.urdf")
+    ).content
+
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(description)

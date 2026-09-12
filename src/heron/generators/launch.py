@@ -37,6 +37,19 @@ wall clock, and a run recorded that way cannot be replayed (ADR-0003)."""
 
 SPAWNER_TIMEOUT: Final = "60"
 
+TEXT_PARAM: Final = "str"
+"""Declared type of every parameter whose value is free text.
+
+Without it the launch frontend guesses the type by running the value through a
+YAML loader, and a robot description is not YAML. The generated header alone is
+enough to break it: a line like "Источник: файл.urdf" reads as a mapping inside
+a scalar and the whole launch fails to parse before a single process starts.
+
+So the two decisions collide -- ADR-0010 puts a traceable header on every
+generated file, and the launch frontend sniffs types -- and this is where they
+are reconciled. Declaring the type is also simply correct: the value is text,
+and guessing was never wanted."""
+
 
 def _argument(parent: ET.Element, name: str, default: str) -> None:
     ET.SubElement(parent, "arg", {"name": name, "default": default})
@@ -66,11 +79,19 @@ def _robot(parent: ET.Element, instance: Instance) -> None:
          "name": "robot_state_publisher"},
     )
     ET.SubElement(publisher, "param", {"name": "use_sim_time", "value": "true"})
-    ET.SubElement(publisher, "param", {"name": "frame_prefix", "value": frame_prefix(instance)})
     ET.SubElement(
         publisher,
         "param",
-        {"name": "robot_description", "value": f"$(command 'cat {description}')"},
+        {"name": "frame_prefix", "value": frame_prefix(instance), "type": TEXT_PARAM},
+    )
+    ET.SubElement(
+        publisher,
+        "param",
+        {
+            "name": "robot_description",
+            "value": f"$(command 'cat {description}')",
+            "type": TEXT_PARAM,
+        },
     )
 
     x, y, z = instance.pose
