@@ -1,5 +1,25 @@
 """Public API for missions and skills."""
 
-from .runner import AdapterContext, IncompatibleSkillError, check_runnable, run_skill
+from .executor import (
+    Clock,
+    Executor,
+    ManualClock,
+    RunResult,
+    WallClock,
+    run_skill,
+    watchdog_timeout,
+)
+from .runner import AdapterContext, IncompatibleSkillError, check_runnable
 
-__all__ = ["AdapterContext", "IncompatibleSkillError", "check_runnable", "run_skill"]
+__all__ = [
+    "AdapterContext",
+    "Clock",
+    "Executor",
+    "IncompatibleSkillError",
+    "ManualClock",
+    "RunResult",
+    "WallClock",
+    "check_runnable",
+    "run_skill",
+    "watchdog_timeout",
+]

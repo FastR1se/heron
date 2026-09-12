@@ -2,8 +2,14 @@
 
 "Each adapter is run through a shared set of checks" -- this is that set. It is
 written against the protocol, not against ``DummyAdapter``, so a vendor adapter
-can be added to ``ADAPTERS`` and be held to the same standard. Today the list
-has one entry; the point is that adding the second one costs nothing.
+can be added to ``ADAPTERS`` and be held to the same standard. Phase 1 left the
+list with one entry and claimed the second would cost nothing; phase 3 added it,
+and it did.
+
+The two entries are not alike, and that is the point of the set. One is a robot
+made of numbers with no outside at all; the other talks to a robot over ROS 2
+topics, and appears here behind a transport that carries nothing (ADR-0014). The
+checks below know about neither -- they ask only what the protocol promises.
 """
 
 from __future__ import annotations
@@ -14,13 +20,30 @@ import pytest
 
 from conftest import make_profile
 from heron.adapters.dummy import DummyAdapter, NotConnectedError, SafetyViolationError
+from heron.adapters.ros2_control import Ros2ControlAdapter
 from heron.core.capabilities import Capability
 from heron.core.enums import ActionType, ControlMode
 from heron.core.models import RobotProfile
 from heron.core.protocols import ControlAdapter
 from heron.core.types import Command
+from heron.ros2 import names
+from heron.ros2.transport import RecordingTransport
 
-ADAPTERS: list[Callable[[], ControlAdapter]] = [DummyAdapter]
+STATES = 32
+"""Readings queued for a link-based adapter, enough for any check below."""
+
+
+def _over_topics() -> ControlAdapter:
+    """A ros2_control adapter over a transport that carries nothing.
+
+    The queued readings are the part a simulator would supply. Nothing here
+    integrates them or moves anything: the checks in this file are about what
+    the protocol promises, and none of them is about motion.
+    """
+    return Ros2ControlAdapter(RecordingTransport())
+
+
+ADAPTERS: list[Callable[[], ControlAdapter]] = [DummyAdapter, _over_topics]
 
 
 @pytest.fixture(params=ADAPTERS)
@@ -31,7 +54,24 @@ def adapter(request: pytest.FixtureRequest) -> ControlAdapter:
 @pytest.fixture
 def connected(adapter: ControlAdapter, profile: RobotProfile) -> ControlAdapter:
     adapter.connect(profile, {})
+    _prime(adapter, profile)
     return adapter
+
+
+def _prime(adapter: ControlAdapter, profile: RobotProfile) -> None:
+    """Give a topic-driven adapter something to read, as a running world would."""
+    transport = getattr(adapter, "transport", None)
+    if not isinstance(transport, RecordingTransport):
+        return
+    dof = profile.contract.dof
+    for index in range(STATES):
+        transport.deliver_state(
+            names.state_topic(""),
+            stamp=index / profile.contract.state_rate_hz,
+            names_=list(profile.contract.joint_order),
+            position=[0.0] * dof,
+            velocity=[0.0] * dof,
+        )
 
 
 # -- the shared contract ---------------------------------------------------

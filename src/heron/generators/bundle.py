@@ -10,6 +10,13 @@ a disk otherwise carry no statement about where they came from, and "were these
 generated from the current profile?" becomes a question answered by looking at
 modification times. With a manifest and deterministic generation it is answered
 by regenerating and comparing (ADR-0010).
+
+It also carries, for each driven robot, the names of the control plane the
+bundle creates -- its controller, its topics, its message types. Those are what
+an adapter has to find at run time, and writing them next to the configuration
+that creates them turns "does the adapter look in the right place?" from a
+question about two modules agreeing into a line to read off a disk and compare
+with ``ros2 topic list`` (ADR-0014).
 """
 
 from __future__ import annotations
@@ -23,11 +30,13 @@ from ..core.enums import Role
 from ..core.models import RobotProfile, Scenario, ScenarioRobot, World, sim_target
 from ..core.urdf import parse_urdf
 from ..registry.registry import Registry
+from ..ros2 import names
 from .common import (
     Bundle,
     GeneratedFile,
     GeneratorError,
     Instance,
+    namespace,
     resolve_description,
     sorted_files,
 )
@@ -37,7 +46,9 @@ from .rviz import rviz_file
 from .world import WORLD_FILE, world_file
 
 MANIFEST_FILE: Final = "manifest.json"
-MANIFEST_SCHEMA_VERSION: Final = 1
+MANIFEST_SCHEMA_VERSION: Final = 2
+"""Bumped when the manifest gains or loses a field. Version 2 added the
+``control`` block of every driven robot (ADR-0014)."""
 SOLO_ROLE: Final = Role.SCRIPTED
 """Role a lone profile is generated under: driven, but not by a learner."""
 
@@ -113,6 +124,26 @@ def _root_links(instances: Sequence[Instance]) -> dict[str, str]:
     return frames
 
 
+def _manifest_robot(item: Instance) -> dict[str, Any]:
+    """One robot's line in the manifest.
+
+    An obstacle gets no control block, and that is a statement rather than an
+    omission: nothing drives it, so there is no topic to name (ADR-0012).
+    """
+    entry: dict[str, Any] = {
+        "id": item.id,
+        "profile": item.profile.name,
+        "role": str(item.role),
+        "pose": list(item.pose),
+        "contract_id": item.profile.contract.contract_id,
+        "revision": item.profile.contract.revision,
+        "description": item.profile.description.urdf,
+    }
+    if item.controlled:
+        entry["control"] = names.control_plane(namespace(item), item.profile)
+    return entry
+
+
 def _manifest(
     scenario: Scenario, instances: Sequence[Instance], files: Sequence[GeneratedFile]
 ) -> GeneratedFile:
@@ -120,18 +151,7 @@ def _manifest(
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "scenario": scenario.name,
         "world": {"backend": scenario.world.backend, "file": scenario.world.file},
-        "robots": [
-            {
-                "id": item.id,
-                "profile": item.profile.name,
-                "role": str(item.role),
-                "pose": list(item.pose),
-                "contract_id": item.profile.contract.contract_id,
-                "revision": item.profile.contract.revision,
-                "description": item.profile.description.urdf,
-            }
-            for item in instances
-        ],
+        "robots": [_manifest_robot(item) for item in instances],
         "files": sorted(str(item.path) for item in files),
     }
     return GeneratedFile(

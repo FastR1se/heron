@@ -34,6 +34,7 @@ heron = "heron.cli.main:app"
 # packages use. The core has no private path for its own adapters.
 [project.entry-points."heron.adapters"]
 dummy = "heron.adapters.dummy:DummyAdapter"
+ros2_control = "heron.adapters.ros2_control:Ros2ControlAdapter"
 
 [project.entry-points."heron.sim_backends"]
 gazebo = "heron.sim.gazebo:GazeboBackend"

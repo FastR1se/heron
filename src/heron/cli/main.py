@@ -11,9 +11,10 @@ Exit codes are part of the interface, because CI depends on them:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+import yaml
 
 from ..core.branding import APP_TITLE, data_home, env_var, image_name, registry_root
 from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
@@ -25,12 +26,14 @@ from ..generators.common import Bundle, GeneratorError
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
 from ..scenario.loader import load_scenario
+from ..sdk.runner import IncompatibleSkillError
 from ..sim.gazebo import GazeboBackend, SimulationError
 from ..sim.process import PlanningLauncher
 from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
 from .new_robot import write_stub
+from .run import RunError, describe, execute
 
 EXIT_OK = 0
 EXIT_FOUND_ERRORS = 1
@@ -256,6 +259,92 @@ def sim_run(
         typer.echo("\nостанавливаю")
     finally:
         backend.stop()
+
+
+# -- run -------------------------------------------------------------------
+
+
+@app.command()
+def run(
+    scenario_file: Annotated[Path, typer.Argument(help="Файл сценария.")],
+    robot: Annotated[
+        str | None,
+        typer.Option("--robot", help="Идентификатор робота, если их в сцене несколько."),
+    ] = None,
+    skill: Annotated[
+        str | None,
+        typer.Option("--skill", help="Навык вместо объявленного сценарием."),
+    ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option("--target", help="Ключ адаптера; по умолчанию — из бэкенда сцены."),
+    ] = None,
+    goal: Annotated[
+        list[str] | None,
+        typer.Option("--goal", "-g", help="Поле цели навыка: ключ=значение; можно повторять."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Показать план и ничего не запускать."),
+    ] = False,
+    roots: RootsOption = None,
+) -> None:
+    """Выполнить задачу сценария на роботе (фаза 3).
+
+    Мир поднимается отдельной командой — ``sim run``. Здесь платформа
+    подключается к уже поднятому миру и ведёт одного робота: мир и контейнер
+    робота — разные единицы развёртывания (раздел 4).
+    """
+    try:
+        scenario = load_scenario(scenario_file)
+    except LoadError as exc:
+        typer.echo(f"не читается  {exc}", err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+
+    try:
+        lines, result = execute(
+            scenario,
+            _registry(roots),
+            robot_id=robot,
+            skill=skill,
+            target=target,
+            goal=_goal(goal),
+            dry_run=dry_run,
+        )
+    except (RunError, IncompatibleSkillError, ProfileNotFoundError, LoadError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+    for line in lines:
+        typer.echo(line)
+    if result is None:
+        typer.echo("\nсухой прогон: ничего не подключено и не запущено")
+        raise typer.Exit(EXIT_OK)
+
+    typer.echo("")
+    for line in describe(result):
+        typer.echo(line)
+    raise typer.Exit(EXIT_OK if result.ok else EXIT_FOUND_ERRORS)
+
+
+def _goal(pairs: list[str] | None) -> dict[str, Any]:
+    """Goal fields from the command line.
+
+    Values are read as YAML so that a vector stays a vector: ``target=[0,1,0]``
+    has to arrive as three numbers, and a shell hands over a string. The core
+    does not interpret a goal (section 7) -- this only undoes the flattening the
+    shell imposed.
+    """
+    goal: dict[str, Any] = {}
+    for item in pairs or []:
+        key, sep, raw = item.partition("=")
+        if not sep:
+            raise typer.BadParameter(f"{item!r}: ожидается ключ=значение")
+        try:
+            goal[key.strip()] = yaml.safe_load(raw)
+        except yaml.YAMLError as exc:
+            raise typer.BadParameter(f"{item!r}: значение не разбирается — {exc}") from exc
+    return goal
 
 
 # -- profile ---------------------------------------------------------------

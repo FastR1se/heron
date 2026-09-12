@@ -308,6 +308,7 @@ heron/
 │   ├── generators/    # ros2_control, world, launch, rviz, manifest
 │   ├── store/         # артефакты
 │   ├── adapters/      # только общие: ros2_control, dummy
+│   ├── ros2/          # имена управляющего слоя и транспорт (ADR-0014)
 │   ├── sim/           # обёртки бэкендов симуляции
 │   ├── train/         # обёртки бэкендов обучения
 │   ├── coordinator/   # координатор комплекса

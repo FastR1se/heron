@@ -35,9 +35,11 @@ limits:
 adapters:
   sim.dummy:
     plugin: dummy
+  # Имя контроллера здесь не задаётся: оно выводится из режима управления и
+  # типа действия, то есть уже описано контрактом. Поле рядом с ним было бы
+  # той же величиной во второй раз — и разошлось бы с порождённым конфигом.
   sim.gazebo:
     plugin: ros2_control
-    params: {controller: joint_trajectory_controller}
 
-skills: [hold]
+skills: [hold, move_joints]
 image: robot-arm:latest

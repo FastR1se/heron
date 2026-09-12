@@ -1,12 +1,14 @@
-"""Running one skill against one adapter.
+"""What a running skill sees, and whether it may run at all.
 
-This is the smallest thing that deserves the name "executor": read state, tick
-the skill, let it send commands, stop on a terminal status. The real executor
-(phase 3) adds task sequencing and a watchdog; the loop shape stays this one.
+The loop itself lives in ``executor`` -- this module holds the two things the
+loop needs before it starts: the context handed to a skill, and the check that
+says whether this skill may drive this robot through this link.
 
-The compatibility check happens before the first tick, not during it. Invariant
-6: a skill the robot cannot run is a validator error, not a failure discovered
-halfway through a motion.
+The check is separate from the loop on purpose. Invariant 6: a skill the robot
+cannot run is a validator error, and an error the validator can state before a
+run must not be something a run discovers halfway through a motion. Keeping it
+callable on its own is what lets ``skill check`` answer the same question
+without touching a robot.
 """
 
 from __future__ import annotations
@@ -15,10 +17,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.capabilities import Capability
-from ..core.enums import ControlMode, Status
+from ..core.enums import ControlMode
 from ..core.models import RobotProfile, SkillSpec
 from ..core.protocols import ControlAdapter, Skill
-from ..core.types import Command, RobotState
+from ..core.types import Command
 from ..validator.report import Report, error
 from ..validator.rules import check_skill_against_profile
 
@@ -38,8 +40,15 @@ class AdapterContext:
     profile_: RobotProfile
     adapter: ControlAdapter
     log_lines: list[str] = field(default_factory=list)
+    sent: list[Command] = field(default_factory=list)
+    """Everything the skill emitted, in order.
+
+    Kept because a run is worth nothing if what was commanded during it cannot
+    be looked at afterwards, and because the adapter is not obliged to remember:
+    ``DummyAdapter`` does, a link to a real robot does not."""
+
     current_time: float = 0.0
-    """Clock of the world, advanced by the runner from the state it read."""
+    """Clock of the world, advanced by the executor from the state it read."""
 
     @property
     def profile(self) -> RobotProfile:
@@ -47,6 +56,7 @@ class AdapterContext:
 
     def send(self, cmd: Command) -> None:
         self.adapter.send_command(cmd)
+        self.sent.append(cmd)
 
     def now(self) -> float:
         return self.current_time
@@ -111,32 +121,3 @@ def check_runnable(skill: Skill, profile: RobotProfile, adapter: ControlAdapter)
             )
         )
     return report
-
-
-def run_skill(
-    skill: Skill,
-    adapter: ControlAdapter,
-    profile: RobotProfile,
-    goal: dict[str, Any] | None = None,
-    *,
-    max_ticks: int = 10_000,
-) -> tuple[Status, list[RobotState]]:
-    """Run a skill to a terminal status, returning it and the states seen."""
-    report = check_runnable(skill, profile, adapter)
-    if not report.ok:
-        raise IncompatibleSkillError(report)
-
-    ctx = AdapterContext(profile_=profile, adapter=adapter)
-    skill.start(dict(goal or {}), ctx)
-
-    seen: list[RobotState] = []
-    for _ in range(max_ticks):
-        state = adapter.read_state()
-        seen.append(state)
-        ctx.current_time = state.timestamp
-        status = skill.tick(state)
-        if status is not Status.RUNNING:
-            return status, seen
-
-    skill.cancel()
-    return Status.FAILURE, seen

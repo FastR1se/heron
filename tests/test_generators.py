@@ -8,6 +8,7 @@ the input is never written, and the output is the same twice.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from heron.generators.ros2_control import (
 )
 from heron.generators.world import physics_step
 from heron.registry.registry import Registry
+from heron.ros2 import names
 
 GAZEBO = "gazebo"
 
@@ -414,10 +416,57 @@ def test_parameter_keys_are_fully_qualified(tmp_path: Path) -> None:
 
     assert set(document) == {
         "/arm1/controller_manager",
+        "/arm1/joint_state_broadcaster",
         "/arm1/joint_position_controller",
     }
     manager = document["/arm1/controller_manager"]["ros__parameters"]
     assert manager["joint_state_broadcaster"]["type"].startswith("joint_state_broadcaster/")
+
+
+def test_the_broadcaster_is_told_where_to_publish(tmp_path: Path) -> None:
+    """The adapter subscribes to the result, so it is stated and not inherited.
+
+    With ``use_local_topics`` true the states move to the broadcaster's own node
+    and the adapter finds an empty topic -- and nothing reports that, because
+    nothing is wrong on either side taken alone (ADR-0014)."""
+    profile = _profile(tmp_path)
+    document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
+
+    broadcaster = document["/arm1/joint_state_broadcaster"]["ros__parameters"]
+    assert broadcaster[names.LOCAL_TOPICS_PARAM] is False
+    assert names.state_topic("arm1") == "/arm1/joint_states"
+
+
+def test_the_manifest_names_the_topics_the_adapter_will_use(tmp_path: Path) -> None:
+    """What a run will look for, on disk before the run (ADR-0014)."""
+    _profile(tmp_path)
+    bundle = build(_scenario(), Registry([tmp_path]), into=tmp_path / "out")
+    manifest = json.loads(
+        next(f for f in bundle.files if str(f.path) == "manifest.json").content
+    )
+
+    plane = {item["id"]: item.get("control") for item in manifest["robots"]}
+    assert plane["arm1"]["state_topic"] == "/arm1/joint_states"
+    assert plane["arm1"]["command_topic"] == "/arm1/joint_position_controller/commands"
+    assert plane["arm1"]["controller"] == "joint_position_controller"
+
+
+def test_an_obstacle_has_no_control_plane_in_the_manifest(tmp_path: Path) -> None:
+    """Nothing drives it, so there is no topic to name (ADR-0012)."""
+    _profile(tmp_path)
+    scenario = _scenario(
+        robots=(
+            {"id": "arm1", "profile": "arm", "role": "scripted"},
+            {"id": "box", "profile": "arm", "role": "static"},
+        )
+    )
+    bundle = build(scenario, Registry([tmp_path]), into=tmp_path / "out")
+    manifest = json.loads(
+        next(f for f in bundle.files if str(f.path) == "manifest.json").content
+    )
+    plane = {item["id"]: item for item in manifest["robots"]}
+    assert "control" in plane["arm1"]
+    assert "control" not in plane["box"]
 
 
 def test_the_namespace_is_the_same_everywhere(tmp_path: Path) -> None:

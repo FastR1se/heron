@@ -74,8 +74,12 @@ def test_commands_faster_than_state_is_a_warning() -> None:
 
 
 def test_uninstalled_adapter_plugin_is_a_warning_not_an_error() -> None:
-    """CI runs without vendor packages by design (section 10)."""
-    profile = make_profile(adapters={"sim.gazebo": AdapterSpec(plugin="ros2_control")})
+    """CI runs without vendor packages by design (section 10).
+
+    The plugin named here is deliberately one no package registers: the built-in
+    ones are installed by this very repository, so using one would test nothing.
+    """
+    profile = make_profile(adapters={"sim.gazebo": AdapterSpec(plugin="vendor_sdk")})
     report = check_profile(profile)
     assert report.ok
     assert "adapter.plugin_not_installed" in report.codes()

@@ -21,6 +21,12 @@ An action the target format has no interface for is refused, not approximated.
 A Cartesian pose is not a joint command, and writing one as if it were would
 produce a robot that moves and is wrong -- the failure this platform exists to
 prevent.
+
+What things are *called* is not decided here. Controller names, interfaces and
+topics live in ``ros2.names``, because the adapter has to find at run time
+exactly what this module configures, and two modules spelling the same name
+apart is how phase 2 lost a scene (ADR-0013, ADR-0014). This module decides how
+they are written down; that one decides what they are.
 """
 
 from __future__ import annotations
@@ -32,10 +38,11 @@ from xml.etree import ElementTree as ET
 
 import yaml
 
-from ..core.enums import ActionType, ControlMode, ObservationType
+from ..core.enums import ActionType, ControlMode
 from ..core.models import RobotProfile
 from ..core.units import to_radians
 from ..core.urdf import UrdfModel, parse_urdf
+from ..ros2 import names
 from .common import (
     XML_COMMENT,
     GeneratedFile,
@@ -53,31 +60,8 @@ HARDWARE_PLUGIN: Final = "gz_ros2_control/GazeboSimSystem"
 SYSTEM_PLUGIN_FILE: Final = "gz_ros2_control-system"
 SYSTEM_PLUGIN_NAME: Final = "gz_ros2_control::GazeboSimROS2ControlPlugin"
 
-COMMAND_INTERFACES: Final[dict[ActionType, str]] = {
-    ActionType.JOINT_POSITION: "position",
-    ActionType.JOINT_VELOCITY: "velocity",
-    ActionType.JOINT_TORQUE: "effort",
-}
-"""Action types that map onto a per-joint command interface."""
-
-STATE_INTERFACES: Final[dict[ObservationType, str]] = {
-    ObservationType.JOINT_POS: "position",
-    ObservationType.JOINT_VEL: "velocity",
-    ObservationType.JOINT_TORQUE: "effort",
-}
-"""Observation terms that map onto a per-joint state interface. Terms about the
-base or about the previous action are not joint state: the first comes from
-odometry, the second from whoever produced the action."""
-
-STREAMING_CONTROLLERS: Final[dict[ActionType, str]] = {
-    ActionType.JOINT_POSITION: "position_controllers/JointGroupPositionController",
-    ActionType.JOINT_VELOCITY: "velocity_controllers/JointGroupVelocityController",
-    ActionType.JOINT_TORQUE: "effort_controllers/JointGroupEffortController",
-}
-TRAJECTORY_CONTROLLER: Final = "joint_trajectory_controller/JointTrajectoryController"
-
-BROADCASTER: Final = "joint_state_broadcaster"
-BROADCASTER_TYPE: Final = "joint_state_broadcaster/JointStateBroadcaster"
+BROADCASTER: Final = names.BROADCASTER
+BROADCASTER_TYPE: Final = names.BROADCASTER_TYPE
 
 CONTROLLERS_FILE: Final = "controllers.yaml"
 DESCRIPTION_FILE: Final = "description.urdf"
@@ -85,56 +69,37 @@ DESCRIPTION_FILE: Final = "description.urdf"
 
 def command_interface(profile: RobotProfile) -> str:
     """The one command interface this robot's action maps onto."""
-    action = profile.contract.action.type
-    try:
-        return COMMAND_INTERFACES[action]
-    except KeyError:
+    interface = names.command_interface(profile)
+    if interface is None:
+        action = profile.contract.action.type
         raise GeneratorError(
             f"{profile.name}: действие {action} не отображается на интерфейс сустава. "
-            f"Отображаются: {', '.join(sorted(COMMAND_INTERFACES))}. "
+            f"Отображаются: {', '.join(sorted(names.COMMAND_INTERFACES))}. "
             f"Декартова поза и ширина захвата требуют собственного контроллера, "
             f"и подменять их позициями суставов платформа не станет (ADR-0009)"
-        ) from None
+        )
+    return interface
 
 
 def state_interfaces(profile: RobotProfile) -> list[str]:
-    """State interfaces the contract's observation asks for, in a stable order.
-
-    Position is always present: without it neither the broadcaster nor a
-    visualization has anything to show, and a contract that observes only
-    velocity still describes a robot whose joints have positions.
-    """
-    wanted = {"position"}
-    for term in profile.contract.observation:
-        interface = STATE_INTERFACES.get(term.type)
-        if interface is not None:
-            wanted.add(interface)
-    order = ["position", "velocity", "effort"]
-    return [name for name in order if name in wanted]
+    """State interfaces the contract's observation asks for (``ros2.names``)."""
+    return names.state_interfaces(profile)
 
 
 def controller_name(profile: RobotProfile) -> str:
-    """Name of the controller this robot is driven by.
-
-    Derived from what it is driven with, not from what kind of machine it is:
-    the core knows capabilities, not types (invariant 7).
-    """
-    if profile.control_mode is ControlMode.COMMAND:
-        return "joint_trajectory_controller"
-    return f"{profile.contract.action.type}_controller"
+    """Name of the controller this robot is driven by (``ros2.names``)."""
+    return names.controller_name(profile)
 
 
 def controller_type(profile: RobotProfile) -> str:
     """Class of controller, chosen by control mode and action (section 3)."""
-    if profile.control_mode is ControlMode.COMMAND:
-        return TRAJECTORY_CONTROLLER
-    action = profile.contract.action.type
-    if action not in STREAMING_CONTROLLERS:
+    kind = names.controller_type(profile)
+    if kind is None:
         raise GeneratorError(
-            f"{profile.name}: для действия {action} в потоковом режиме нет "
-            f"группового контроллера"
+            f"{profile.name}: для действия {profile.contract.action.type} в потоковом "
+            f"режиме нет группового контроллера"
         )
-    return STREAMING_CONTROLLERS[action]
+    return kind
 
 
 def _joint_bounds(profile: RobotProfile, index: int) -> tuple[float, float] | None:
@@ -260,12 +225,19 @@ def controllers_config(instance: Instance) -> GeneratedFile:
         controller["command_interfaces"] = [command_interface(profile)]
         controller["state_interfaces"] = state_interfaces(profile)
 
+    # Where the broadcaster publishes is stated, not inherited. Its default
+    # today resolves to <namespace>/joint_states, which is what the adapter
+    # subscribes to -- but a default is a fact about someone else's source, and
+    # the adapter would find an empty topic on the day it changed (ADR-0014).
+    broadcaster: dict[str, Any] = {names.LOCAL_TOPICS_PARAM: False}
+
     # Keys are fully qualified: the controller manager of this robot runs under
     # the robot's namespace, and a parameter file keyed on a bare node name never
     # reaches it. Nothing warns about that -- the parameters are simply absent,
     # and the first sign is a controller that "has no type".
     document: dict[str, Any] = {
         node_name(instance, "controller_manager"): {"ros__parameters": manager},
+        node_name(instance, BROADCASTER): {"ros__parameters": broadcaster},
         node_name(instance, name): {"ros__parameters": controller},
     }
     body = yaml.safe_dump(document, allow_unicode=True, sort_keys=False, default_flow_style=False)

@@ -17,11 +17,13 @@ from typing import cast
 from ..core.models import SkillSpec
 from ..core.plugins import PluginError, available, load
 from .hold import HoldSkill
+from .move_joints import MoveJointsSkill
 
 SkillFactory = Callable[[], object]
 
 BUILTIN: dict[str, SkillFactory] = {
     HoldSkill.spec.name: HoldSkill,
+    MoveJointsSkill.spec.name: MoveJointsSkill,
 }
 """Skills shipped with the core. Nothing vendor-specific may appear here."""
 

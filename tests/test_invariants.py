@@ -142,6 +142,30 @@ def test_core_imports_without_examples() -> None:
     assert "ok" in result.stdout
 
 
+def test_importing_the_platform_imports_no_ros2() -> None:
+    """Section 10, at the one place it is easiest to break.
+
+    ``ros2_control`` is a core adapter and the CLI imports it on every command,
+    including ``validate``. If it pulled in rclpy at import time, the platform
+    would stop installing on a machine without a ROS 2 distribution -- which is
+    the machine it is developed on. The import has to stay inside ``connect``
+    (ADR-0014), and a subprocess is the only honest way to check that, because
+    this process has already imported everything.
+    """
+    code = (
+        "import sys; "
+        "import heron.cli.main, heron.ros2, heron.adapters.ros2_control; "
+        "leaked = sorted(m for m in sys.modules "
+        "if m.split('.')[0] in {'rclpy', 'sensor_msgs', 'std_msgs', 'trajectory_msgs'}); "
+        "print('leaked:', leaked)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO_ROOT
+    )
+    assert result.returncode == 0, result.stderr
+    assert "leaked: []" in result.stdout, result.stdout
+
+
 def test_core_has_no_vendor_dependencies() -> None:
     """Section 10: the core installs without a simulator or an SDK."""
     import tomllib

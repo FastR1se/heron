@@ -12,7 +12,8 @@ from conftest import make_profile
 from heron.adapters.dummy import DummyAdapter
 from heron.core.capabilities import Capability
 from heron.core.enums import ActionType, ControlMode, Status
-from heron.sdk.runner import IncompatibleSkillError, check_runnable, run_skill
+from heron.sdk.executor import run_skill
+from heron.sdk.runner import IncompatibleSkillError, check_runnable
 from heron.skills.hold import HoldSkill
 from heron.skills.library import SkillLibrary, SkillNotFoundError
 
