@@ -345,9 +345,20 @@ my_robot/
 └── urdf/my_robot.urdf      # скелет описания — дальше это ваш входной файл
 ```
 
-Заполняете TODO, проверяете валидатором, порождаете среды. Расширение идёт только
-через четыре протокола — `ControlAdapter`, `Skill`, `SimBackend`, `TrainBackend`,
-— и подключается штатными точками входа Python:
+Заполняете TODO, проверяете валидатором, порождаете среды:
+
+```bash
+heron validate examples/robots/my_robot/profile.yaml
+heron gen      examples/robots/my_robot/profile.yaml --into generated/my_robot --backend gazebo
+```
+
+**Подробный разбор — [docs/adding-a-robot.md](docs/adding-a-robot.md):** откуда
+взять описание кинематики, что делать, если есть только CAD-модель, какие
+требования к URDF, что означает каждое поле профиля и что валидатор скажет, если
+профиль и модель разошлись.
+
+Расширение идёт только через четыре протокола — `ControlAdapter`, `Skill`,
+`SimBackend`, `TrainBackend`, — и подключается штатными точками входа Python:
 
 ```toml
 [project.entry-points."heron.adapters"]
@@ -388,6 +399,7 @@ pytest tests/test_invariants.py
 | [ARCHITECTURE.md](ARCHITECTURE.md) | источник правды: инварианты, абстракции, дорожная карта |
 | [docs/decisions/](docs/decisions/) | почему сделано так: контекст, решение, отвергнутые альтернативы |
 | [docs/journal/](docs/journal/) | ход работы, включая тупики и отрицательные результаты |
+| [docs/adding-a-robot.md](docs/adding-a-robot.md) | как добавить своего робота: от CAD до сцены |
 | [docs/phase0.md](docs/phase0.md) | разворот Linux-окружения: ROS 2, Gazebo, MuJoCo, Isaac Lab |
 | [CHANGELOG.md](CHANGELOG.md) | что изменилось для пользователя по фазам |
 

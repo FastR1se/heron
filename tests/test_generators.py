@@ -336,3 +336,39 @@ def test_a_backend_the_profile_has_no_adapter_for_is_refused() -> None:
     profile = make_profile(adapters={"sim.dummy": AdapterSpec(plugin="dummy")})
     with pytest.raises(GeneratorError):
         scenario_for_profile(profile, GAZEBO)
+
+
+def test_a_backend_without_generators_is_refused(tmp_path: Path) -> None:
+    """Everything generated here belongs to one simulator. Handing out the same
+    bundle under another backend's name would describe a world nobody asked
+    for."""
+    _profile(tmp_path)
+    scenario = Scenario.model_validate(
+        {
+            "schema_version": 1,
+            "name": "scene",
+            "world": {"backend": "dummy"},
+            "robots": [{"id": "arm1", "profile": "arm", "role": "scripted"}],
+        }
+    )
+    with pytest.raises(GeneratorError) as caught:
+        build(scenario, Registry([tmp_path]), into=tmp_path / "out")
+    assert "dummy" in str(caught.value)
+
+
+def test_a_fresh_stub_generates_its_environments(tmp_path: Path) -> None:
+    """The golden path of section 9: new robot -> validate -> environments,
+    without editing the profile first."""
+    from heron.cli.new_robot import write_stub
+    from heron.core.loading import load_model
+    from heron.core.models import RobotProfile
+    from heron.generators import build_profile
+
+    profile_path, _, _ = write_stub("some_robot", tmp_path, dof=4)
+    profile = load_model(profile_path, RobotProfile)
+
+    bundle = build_profile(profile, profile_path, into=tmp_path / "out", backend=GAZEBO)
+    bundle.write()
+
+    assert (tmp_path / "out" / "some_robot" / "controllers.yaml").is_file()
+    assert (tmp_path / "out" / "bringup.launch.xml").is_file()

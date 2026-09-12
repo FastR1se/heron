@@ -41,6 +41,14 @@ MANIFEST_SCHEMA_VERSION: Final = 1
 SOLO_ROLE: Final = Role.SCRIPTED
 """Role a lone profile is generated under: driven, but not by a learner."""
 
+GENERATED_BACKENDS: Final = frozenset({"gazebo"})
+"""Backends these generators can actually produce artifacts for.
+
+Everything written here -- the hardware component, the system plugin, the world
+format, the spawn command -- belongs to one simulator. Generating it under
+another backend's name would hand out a bundle that looks right and describes a
+world nobody asked for, so an unsupported backend is refused instead."""
+
 
 def scenario_instances(
     scenario: Scenario, registry: Registry
@@ -178,6 +186,15 @@ def _assemble(
     root: Path,
     scenario_path: Path | None = None,
 ) -> Bundle:
+    if scenario.world.backend not in GENERATED_BACKENDS:
+        raise GeneratorError(
+            f"сцена {scenario.name!r}: генераторов для бэкенда "
+            f"{scenario.world.backend!r} нет. Порождаются среды только для: "
+            f"{', '.join(sorted(GENERATED_BACKENDS))}. Робот с адаптером под "
+            f"другой бэкенд проверяется валидатором, но сред для него пока не "
+            f"строится"
+        )
+
     files: list[GeneratedFile] = []
 
     for instance in instances:

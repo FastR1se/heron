@@ -63,9 +63,9 @@ limits:
 adapters:
   sim.dummy:
     plugin: dummy            # робот без железа: годится для проверки цепочки
-  # TODO: адаптер под бэкенд сцены и, при наличии железа, под реальный робот
-  # sim.gazebo:
-  #   plugin: ros2_control
+  sim.gazebo:
+    plugin: ros2_control     # мир комплекса; из этого адаптера порождаются среды
+  # TODO: при наличии железа — адаптер под реальный робот
   # real:
   #   plugin: {module}:{klass}
 
