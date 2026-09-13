@@ -5,8 +5,9 @@
 #
 # A probe, not an installer. It writes nothing outside $PROBE_ROOT except the apt
 # packages a build step cannot run without -- each named, with its reason, by the
-# step that needs it -- and the vendor SDK's own trace file, /tmp/cdds.LOG. It never stops at the first failure: an expected refusal is a
-# result, and the point of the run is the table at the end. Everything printed
+# step that needs it -- and the vendor SDK's own trace file, /tmp/cdds.LOG. It
+# never stops at the first failure: an expected refusal is a result, and the
+# point of the run is the table at the end. Everything printed
 # goes to one log file -- that file is what to send back.
 #
 # Every step runs in a clean environment (env -i). Whatever the calling shell has
@@ -20,6 +21,11 @@
 #   coexist   rclpy on rmw_cyclonedds_cpp and the vendor SDK in one process
 #   wire      SDK <-> ROS 2 over the wire, both directions, on lo and on the
 #             default interface
+#   cross     SDK on cyclonedds 0.10.2 <-> SDK on 11.x directly, without ROS 2:
+#             the robot runs 0.10.2, so this is the compatibility that matters
+#   lo        why loopback failed in the first run: the multicast flag, the
+#             SDK's configuration with and without its tracing block, and
+#             unicast discovery over lo with an explicit peer
 #
 # Usage:
 #   bash scripts/phase4-probe.sh               # all steps, in order
@@ -49,7 +55,7 @@ readonly CDDS_PY_PIN="0.10.2"                  # what unitree_sdk2py pins
 readonly CDDS_PY_NEW="11.0.1"                  # the first release with wheels for Python 3.12
 
 readonly DOMAIN_ID=1                           # the twin's default; the robot uses 0
-readonly ALL_STEPS="env 0.8 0.5 coexist wire"
+readonly ALL_STEPS="env 0.8 0.5 coexist wire cross lo"
 
 PROBE_ROOT="${PROBE_ROOT:-$HOME/phase4-probe}"
 readonly PROBE_ROOT
@@ -137,9 +143,10 @@ have_sdk_venv() { [[ -x "$1/bin/python" ]] && "$1/bin/python" -c 'import unitree
 write_probes() {
     cat > "$PY_DIR/sdk_import.py" <<'PY'
 import sys
-import cyclonedds
+from importlib.metadata import version
+import cyclonedds  # noqa: F401 -- the import itself is the check
 print("python", sys.version.split()[0])
-print("cyclonedds", cyclonedds.__version__)
+print("cyclonedds", version("cyclonedds"))  # the module has no __version__ (first run)
 try:
     from cyclonedds.__library__ import library_path
     print("libddsc", library_path)
@@ -162,7 +169,9 @@ node = rclpy.create_node("probe_coexist")
 print("rclpy ok, rmw:", get_rmw_implementation_identifier())
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
-ChannelFactoryInitialize(int(sys.argv[1]), "lo")
+# The default interface, not lo: lo is a separate question (step lo), and one
+# failure must not hide the other.
+ChannelFactoryInitialize(int(sys.argv[1]))
 publisher = ChannelPublisher("rt/probe_coexist", LowState_)
 publisher.Init()
 print("sdk channel ok")
@@ -267,6 +276,88 @@ print(f"ros2: опубликовано LowCmd {n}, подписчиков вид
 node.destroy_node()
 rclpy.shutdown()
 PY
+
+    cat > "$PY_DIR/wire_sdk_state_sub.py" <<'PY'
+import sys, time
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
+domain, iface, duration = int(sys.argv[1]), sys.argv[2], float(sys.argv[3])
+ChannelFactoryInitialize(domain) if iface == "auto" else ChannelFactoryInitialize(domain, iface)
+got = []
+def on_state(msg):
+    got.append((time.monotonic(), msg.tick, msg.mode_machine, msg.motor_state[15].q))
+subscriber = ChannelSubscriber("rt/lowstate", LowState_)
+subscriber.Init(on_state)  # no SDK queue: its drops would read as losses on the wire
+time.sleep(duration)
+if len(got) < 2:
+    print(f"sdk: принято LowState {len(got)}")
+    sys.exit(1)
+(t0, k0, mode_machine, q15), (t1, k1, _, _) = got[0], got[-1]
+elapsed, received = t1 - t0, len(got) - 1
+print(f"sdk: принято {received}, mode_machine {mode_machine}, q[15] {q15}, "
+      f"частота приёма {received / elapsed:.1f} Гц, по tick {(k1 - k0) / elapsed:.1f} Гц, "
+      f"потеряно {max(k1 - k0 - received, 0)}")
+PY
+
+    # Unicast discovery over lo: multicast off, the one peer named explicitly.
+    # Read by both sides -- the DDS probe below and ROS 2 through CYCLONEDDS_URI --
+    # so the two cannot disagree about it.
+    cat > "$PY_DIR/peers-lo.xml" <<'XML'
+<CycloneDDS>
+  <Domain Id="any">
+    <General>
+      <Interfaces><NetworkInterface name="lo"/></Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers><Peer address="127.0.0.1"/></Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
+XML
+
+    cat > "$PY_DIR/dds_config_probe.py" <<'PY'
+# A participant and a LowState writer under a named CycloneDDS configuration,
+# built the way the SDK builds its own (Domain, then DomainParticipant), but with
+# the configuration chosen here. Exit code 0 means the participant lived.
+import re, sys, time
+from pathlib import Path
+from cyclonedds.domain import Domain, DomainParticipant
+from cyclonedds.pub import DataWriter
+from cyclonedds.topic import Topic
+from unitree_sdk2py.core.channel_config import ChannelConfigAutoDetermine, ChannelConfigHasInterface
+from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
+
+TRACING = re.compile(r"\s*<Tracing>.*?</Tracing>", re.S)
+SDK_LO = ChannelConfigHasInterface.replace("$__IF_NAME__$", "lo")
+CONFIGS = {
+    "sdk-lo": SDK_LO,
+    "sdk-lo-no-tracing": TRACING.sub("", SDK_LO),
+    "sdk-auto-with-tracing": ChannelConfigAutoDetermine.replace(
+        "</General>",
+        "</General><Tracing><Verbosity>config</Verbosity>"
+        "<OutputFile>/tmp/cdds.LOG</OutputFile></Tracing>", 1),
+    "peers-lo": Path(__file__).with_name("peers-lo.xml").read_text(),
+}
+name, domain_id, duration = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+print(f"{name}: конфигурация\n{CONFIGS[name]}", flush=True)
+domain = Domain(domain_id, CONFIGS[name])
+participant = DomainParticipant(domain_id)
+topic = Topic(participant, "rt/lowstate", LowState_)
+writer = DataWriter(participant, topic)
+msg = unitree_hg_msg_dds__LowState_()
+msg.mode_machine = 4
+msg.motor_state[15].q = 0.5
+end, tick = time.monotonic() + duration, 0
+while time.monotonic() < end:
+    msg.tick = tick
+    writer.write(msg)
+    tick += 1
+    time.sleep(0.002)
+print(f"{name}: участник жив, опубликовано LowState {tick}")
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -321,6 +412,8 @@ step_08() {
 step_05() {
     # bison builds the IDL compiler of the C library; python3-dev gives Python.h to
     # the binding, which on 3.12 compiles from source (no wheels, session 5).
+    # pyyaml goes into each venv because rclpy imports it (step coexist); the
+    # platform's execution venv gets it from pyproject, a bare venv does not.
     ensure_apt 0.5 bison python3-dev || return
 
     step "0.5а — обвязка cyclonedds $CDDS_PY_PIN против CycloneDDS из Jazzy"
@@ -351,7 +444,7 @@ step_05() {
     done
     if [[ -z "$built" ]]; then
         record 0.5б отказ "ни одна C-библиотека 0.10.x не собралась"
-    elif clean "$PY -m venv '$VENV_OWN' && CYCLONEDDS_HOME='$built' '$VENV_OWN/bin/pip' install --no-cache-dir 'cyclonedds==$CDDS_PY_PIN' numpy && '$VENV_OWN/bin/pip' install --no-deps -e '$SDK_DIR'" &&
+    elif clean "$PY -m venv '$VENV_OWN' && CYCLONEDDS_HOME='$built' '$VENV_OWN/bin/pip' install --no-cache-dir 'cyclonedds==$CDDS_PY_PIN' numpy pyyaml && '$VENV_OWN/bin/pip' install --no-deps -e '$SDK_DIR'" &&
          clean "'$VENV_OWN/bin/python' '$PY_DIR/sdk_import.py'"; then
         record 0.5б ok "обвязка $CDDS_PY_PIN на $PY и SDK импортируются, CRC считается"
     else
@@ -359,7 +452,7 @@ step_05() {
     fi
 
     step "0.5в — cyclonedds $CDDS_PY_NEW из колёс (вопреки пину SDK)"
-    if clean "$PY -m venv '$VENV_NEW' && '$VENV_NEW/bin/pip' install --no-cache-dir 'cyclonedds==$CDDS_PY_NEW' numpy && '$VENV_NEW/bin/pip' install --no-deps -e '$SDK_DIR'" &&
+    if clean "$PY -m venv '$VENV_NEW' && '$VENV_NEW/bin/pip' install --no-cache-dir 'cyclonedds==$CDDS_PY_NEW' numpy pyyaml && '$VENV_NEW/bin/pip' install --no-deps -e '$SDK_DIR'" &&
        clean "'$VENV_NEW/bin/python' '$PY_DIR/sdk_import.py'"; then
         record 0.5в ok "SDK импортируется на cyclonedds $CDDS_PY_NEW"
     else
@@ -431,6 +524,80 @@ step_wire() {
     done
 }
 
+venv_of() { [[ $1 == own-lib ]] && echo "$VENV_OWN" || echo "$VENV_NEW"; }
+
+step_cross() {
+    local pair from to out pub
+    for pair in "own-lib cyclonedds11" "cyclonedds11 own-lib"; do
+        read -r from to <<< "$pair"
+        step "0.6 — SDK ($from) → SDK ($to), без ROS 2, интерфейс по умолчанию"
+        if ! have_sdk_venv "$(venv_of "$from")" || ! have_sdk_venv "$(venv_of "$to")"; then
+            record "cross $from→$to" пропущено "нужны оба окружения шага 0.5"; continue
+        fi
+        out="$PROBE_ROOT/cross-$from-$to"
+        clean "'$(venv_of "$from")/bin/python' '$PY_DIR/wire_sdk_pub.py' $DOMAIN_ID auto 16" > "$out-pub.txt" 2>&1 &
+        pub=$!
+        BACKGROUND+=("$pub")
+        sleep 3
+        if clean "'$(venv_of "$to")/bin/python' '$PY_DIR/wire_sdk_state_sub.py' $DOMAIN_ID auto 8" | tee "$out-sub.txt"; then
+            record "cross $from→$to" ok "$(tail -1 "$out-sub.txt")"
+        else
+            record "cross $from→$to" отказ "$(tail -1 "$out-sub.txt")"
+        fi
+        wait "$pub"; cat "$out-pub.txt"
+    done
+}
+
+step_lo() {
+    step "lo — флаг мультикаста"
+    ip -d link show lo
+    if ip link show lo | grep -q MULTICAST; then
+        record "lo MULTICAST" есть "флаг выставлен"
+    else
+        record "lo MULTICAST" нет "без флага CycloneDDS отключает на lo мультикаст и без пиров не находит участников"
+    fi
+
+    local label venv cfg code out pub
+    for label in own-lib cyclonedds11; do
+        venv="$(venv_of "$label")"
+        if ! have_sdk_venv "$venv"; then
+            record "lo $label" пропущено "нет окружения $venv (шаг 0.5)"; continue
+        fi
+        for cfg in sdk-lo sdk-lo-no-tracing sdk-auto-with-tracing; do
+            step "lo — $label, конфигурация $cfg"
+            out="$PROBE_ROOT/lo-$label-$cfg.txt"
+            clean "'$venv/bin/python' '$PY_DIR/dds_config_probe.py' $cfg $DOMAIN_ID 2" > "$out" 2>&1
+            code=$?
+            cat "$out"
+            if (( code == 0 )); then
+                record "lo $label $cfg" ok "$(tail -1 "$out")"
+            else
+                record "lo $label $cfg" "отказ, код $code" "$(grep -m1 -iE 'overflow|error' "$out" || tail -1 "$out")"
+            fi
+        done
+    done
+
+    if [[ ! -f "$WS/install/setup.bash" ]]; then
+        record "lo пиры" пропущено "unitree_hg не собран (шаг 0.8)"; return
+    fi
+    for label in own-lib cyclonedds11; do
+        venv="$(venv_of "$label")"
+        have_sdk_venv "$venv" || continue
+        step "lo — одноадресное обнаружение, пир 127.0.0.1: DDS ($label) → ROS 2"
+        out="$PROBE_ROOT/lo-peers-$label"
+        clean "'$venv/bin/python' '$PY_DIR/dds_config_probe.py' peers-lo $DOMAIN_ID 30" > "$out-pub.txt" 2>&1 &
+        pub=$!
+        BACKGROUND+=("$pub")
+        sleep 3
+        if clean "$WS_ENV && export CYCLONEDDS_URI='file://$PY_DIR/peers-lo.xml' && python3 '$PY_DIR/wire_ros_read.py' 5 20" | tee "$out-read.txt"; then
+            record "lo пиры $label SDK→ROS" ok "$(tail -1 "$out-read.txt")"
+        else
+            record "lo пиры $label SDK→ROS" отказ "$(tail -1 "$out-read.txt")"
+        fi
+        wait "$pub"; cat "$out-pub.txt"
+    done
+}
+
 # ---------------------------------------------------------------------------
 
 summary() {
@@ -459,6 +626,8 @@ main() {
             0.5)     step_05 ;;
             coexist) step_coexist ;;
             wire)    step_wire ;;
+            cross)   step_cross ;;
+            lo)      step_lo ;;
         esac
     done
     summary
