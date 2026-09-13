@@ -41,7 +41,7 @@ import yaml
 from ..core.enums import ActionType, ControlMode
 from ..core.models import RobotProfile
 from ..core.units import to_radians
-from ..core.urdf import UrdfModel, parse_urdf
+from ..core.urdf import UrdfModel, parse_urdf, resolve_mesh
 from ..ros2 import names
 from .common import (
     XML_COMMENT,
@@ -173,15 +173,38 @@ def simulator_plugin_block(instance: Instance, controllers: Path) -> ET.Element:
     return element
 
 
+def anchor_meshes(tree: ET.Element, instance: Instance) -> None:
+    """Point every mesh of the copy at the file the input meant (ADR-0017).
+
+    The input may say ``meshes/pelvis.STL`` and be right -- relative to the
+    input. The copy lives in another directory, and the simulator and the
+    visualization receive it as a string with no directory at all, so a relative
+    reference resolves against nothing and the robot arrives without geometry.
+    The reference is resolved exactly as the validator resolved it when it
+    checked the file exists, and written as an absolute ``file://`` URI.
+    References only a resource path can resolve are left as they are.
+    """
+    mesh_dir = instance.profile.description.mesh_dir
+    for mesh in tree.iter("mesh"):
+        reference = mesh.get("filename")
+        if reference is None:
+            continue
+        target = resolve_mesh(reference, instance.description, mesh_dir)
+        if target is not None:
+            mesh.set("filename", target.resolve().as_uri())
+
+
 def merged_description(instance: Instance, root: Path) -> GeneratedFile:
     """The input description with the derived blocks merged into a copy.
 
     ADR-0009: not a line of kinematics is written here. The input tree is copied
     whole -- including everything the platform does not understand -- and two
-    derived elements are appended.
+    derived elements are appended. Mesh references are anchored to the input,
+    because the copy is read from somewhere else (ADR-0017).
     """
     description = parse_urdf(instance.description)
     tree = copy.deepcopy(description.tree)
+    anchor_meshes(tree, instance)
 
     for existing in tree.findall("ros2_control"):
         tree.remove(existing)

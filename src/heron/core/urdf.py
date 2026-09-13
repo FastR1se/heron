@@ -36,6 +36,14 @@ ANGULAR_TYPES: Final = frozenset({"revolute", "continuous"})
 
 JOINT_TYPES: Final = COMMANDABLE_TYPES | frozenset({"fixed", "floating", "planar"})
 
+UNRESOLVABLE_SCHEMES: Final = ("package://", "model://")
+"""Mesh references only a ROS 2 or simulator resource path can resolve."""
+
+FILE_SCHEME: Final = "file://"
+
+WORLD_LINK: Final = "world"
+"""The link simulators and ``robot_state_publisher`` treat as the fixed frame."""
+
 
 @dataclass(frozen=True, slots=True)
 class JointLimit:
@@ -110,6 +118,33 @@ class UrdfModel:
         children = {item.child for item in self.joints}
         roots = [link for link in self.links if link not in children]
         return roots[0] if len(roots) == 1 else None
+
+    @property
+    def fixed_to_world(self) -> bool:
+        """Whether the description bolts its tree to the world frame.
+
+        By convention a link named ``world`` is the fixed frame, and a fixed joint
+        from it holds the robot in place. Without one the base is free: whatever
+        the joints do, gravity decides where the robot ends up.
+        """
+        return any(item.parent == WORLD_LINK and item.type == "fixed" for item in self.joints)
+
+
+def resolve_mesh(reference: str, description: Path, mesh_dir: str | None = None) -> Path | None:
+    """Where a mesh reference points on disk, or ``None`` if only a resource path can say.
+
+    One resolution for two readers: the rule that checks a mesh exists and the
+    generator that rewrites the reference in its copy (ADR-0017). Resolved in two
+    places, the validator could approve a file the simulator never loads -- the
+    shape every failure of phase 2 had.
+    """
+    if reference.startswith(UNRESOLVABLE_SCHEMES):
+        return None
+    target = Path(reference.removeprefix(FILE_SCHEME))
+    if not target.is_absolute():
+        base = description.parent / mesh_dir if mesh_dir else description.parent
+        target = base / target
+    return target
 
 
 def is_template(path: Path | str) -> bool:

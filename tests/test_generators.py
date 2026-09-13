@@ -551,3 +551,62 @@ def test_every_declared_package_is_installed_by_phase_zero() -> None:
 
     missing = sorted({apt for apt in LAUNCH_PACKAGES.values() if apt not in text})
     assert not missing, f"фаза 0 не ставит: {missing}"
+
+
+# -- meshes in the copy ----------------------------------------------------
+
+MESH_LINKS = """  <link name="shell">
+    <visual><geometry><mesh filename="meshes/shell.stl"/></geometry></visual>
+  </link>
+  <joint name="shell_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="shell"/>
+  </joint>
+  <link name="badge">
+    <visual><geometry><mesh filename="package://vendor/badge.dae"/></geometry></visual>
+  </link>
+  <joint name="badge_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="badge"/>
+  </joint>
+"""
+
+
+def _mesh_references(content: str) -> list[str]:
+    from xml.etree import ElementTree as ET
+
+    body = content.split("?>", 1)[1]
+    return [mesh.get("filename", "") for mesh in ET.fromstring(body).iter("mesh")]
+
+
+def test_relative_meshes_are_anchored_to_the_input(tmp_path: Path) -> None:
+    """Regression, found by the first vendor description (ADR-0017): the copy is
+    read as a string with no directory, so ``meshes/shell.stl`` resolves against
+    nothing and the robot arrives without geometry."""
+    profile = _profile(tmp_path)
+    write_urdf(tmp_path, "arm", list(profile.contract.joint_order), extra=MESH_LINKS)
+    generated = merged_description(_instance(tmp_path, profile), tmp_path / "out").content
+
+    references = _mesh_references(generated)
+    expected = (tmp_path / "urdf" / "meshes" / "shell.stl").resolve().as_uri()
+    assert expected in references
+    assert "meshes/shell.stl" not in references
+
+
+def test_resource_path_meshes_are_left_alone(tmp_path: Path) -> None:
+    """Only a resource path can resolve them; guessing one would be inventing."""
+    profile = _profile(tmp_path)
+    write_urdf(tmp_path, "arm", list(profile.contract.joint_order), extra=MESH_LINKS)
+    generated = merged_description(_instance(tmp_path, profile), tmp_path / "out").content
+
+    assert "package://vendor/badge.dae" in _mesh_references(generated)
+
+
+def test_anchoring_meshes_leaves_the_input_alone(tmp_path: Path) -> None:
+    profile = _profile(tmp_path)
+    write_urdf(tmp_path, "arm", list(profile.contract.joint_order), extra=MESH_LINKS)
+    original = (tmp_path / "urdf" / "arm.urdf").read_text(encoding="utf-8")
+
+    merged_description(_instance(tmp_path, profile), tmp_path / "out")
+
+    assert (tmp_path / "urdf" / "arm.urdf").read_text(encoding="utf-8") == original

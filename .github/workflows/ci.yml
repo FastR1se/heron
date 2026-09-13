@@ -30,6 +30,12 @@ jobs:
           uv venv --python 3.11
           uv pip install -e ".[dev]"
 
+      # Фаза 4: описание G1 — вход производителя, в репозитории лежат только
+      # источник и коммит (ADR-0017). Без загрузки тесты на настоящем файле
+      # пропускаются; здесь они обязаны выполниться.
+      - name: Загрузить описание вендорского робота
+        run: uv run python examples/robots/g1_23dof/fetch_description.py
+
       - name: Линтер
         run: uv run ruff check src tests
 
@@ -98,3 +104,14 @@ jobs:
       - name: Команда запуска сцены строится
         run: |
           uv run heron sim run examples/scenarios/table.yaml --into generated/table --registry examples/robots --dry-run
+
+      # Фаза 4: вендорский робот проходит тот же путь без правок ядра.
+      - name: Вендорский робот проверяется и порождает среды
+        run: |
+          uv run python examples/robots/g1_23dof/fetch_description.py
+          uv run heron validate examples/robots/g1_23dof/profile.yaml
+          uv run heron gen examples/robots/g1_23dof/profile.yaml --into generated/g1_23dof --backend gazebo
+          uv run heron gen examples/robots/g1_23dof/profile.yaml --into generated/g1_23dof --backend gazebo --check
+          uv run heron validate examples/scenarios/humanoid.yaml --registry examples/robots
+          uv run heron sim run examples/scenarios/humanoid.yaml --into generated/humanoid --registry examples/robots --dry-run
+          uv run heron run examples/scenarios/humanoid.yaml --registry examples/robots --dry-run

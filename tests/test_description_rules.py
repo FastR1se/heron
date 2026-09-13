@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from conftest import make_contract, make_profile, urdf_text, write_profile, write_urdf
-from heron.core.enums import AngleUnit
+from heron.core.enums import AccessLevel, AngleUnit
 from heron.core.models import JointMax, JointRange, Limits
 from heron.validator.description import check_description
 
@@ -237,3 +237,57 @@ def test_a_resource_path_mesh_is_left_to_the_run(tmp_path: Path) -> None:
     report = check_description(profile, path)  # type: ignore[arg-type]
     assert report.codes() == ["urdf.mesh_unresolvable"]
     assert report.ok
+
+
+def test_a_relative_mesh_that_exists_is_found(tmp_path: Path) -> None:
+    """The resolution the generator reuses (ADR-0017) must first be right here."""
+    path, profile = _profile_with_description(
+        tmp_path, ["a"], urdf_kwargs={"extra": MESH_LINK.format(reference="meshes/part.stl")}
+    )
+    (tmp_path / "urdf" / "meshes").mkdir()
+    (tmp_path / "urdf" / "meshes" / "part.stl").write_bytes(b"solid part\nendsolid part\n")
+
+    report = check_description(profile, path)  # type: ignore[arg-type]
+    assert report.codes() == []
+
+
+# -- the base --------------------------------------------------------------
+
+WORLD_MOUNT = """  <link name="world"/>
+  <joint name="mount" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+  </joint>
+"""
+
+
+def test_a_free_base_with_the_built_in_controller_off_is_a_warning(tmp_path: Path) -> None:
+    """Two facts, harmless apart: nothing holds the robot up (ADR-0018)."""
+    path, profile = _profile_with_description(
+        tmp_path, ["a"], access_levels=(AccessLevel.LOW,)
+    )
+    report = check_description(profile, path)  # type: ignore[arg-type]
+
+    assert report.codes() == ["urdf.free_base_uncontrolled"]
+    assert report.ok
+
+
+def test_a_free_base_says_nothing_without_access_levels(tmp_path: Path) -> None:
+    """A robot with no built-in controller to switch off: nothing was taken away."""
+    path, profile = _profile_with_description(tmp_path, ["a"])
+    report = check_description(profile, path)  # type: ignore[arg-type]
+
+    assert "urdf.free_base_uncontrolled" not in report.codes()
+
+
+def test_a_base_bolted_to_the_world_holds_itself(tmp_path: Path) -> None:
+    path, profile = _profile_with_description(
+        tmp_path,
+        ["a"],
+        urdf_kwargs={"extra": WORLD_MOUNT},
+        access_levels=(AccessLevel.LOW,),
+    )
+    report = check_description(profile, path)  # type: ignore[arg-type]
+
+    assert "urdf.free_base_uncontrolled" not in report.codes()
+    assert "urdf.no_root_link" not in report.codes()

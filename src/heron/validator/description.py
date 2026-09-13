@@ -24,18 +24,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from ..core.enums import AngleUnit
+from ..core.enums import AccessLevel, AngleUnit
 from ..core.loading import LoadError
 from ..core.models import RobotProfile
 from ..core.units import format_angle, to_radians
-from ..core.urdf import UrdfJoint, UrdfModel, is_template, parse_urdf
+from ..core.urdf import UrdfJoint, UrdfModel, is_template, parse_urdf, resolve_mesh
 from .report import Report, error, warning
 
 TOLERANCE: Final = 1e-6
 """Slack in a limit comparison, in radians or metres. Float noise, not policy."""
-
-UNRESOLVABLE_SCHEMES: Final = ("package://", "model://")
-"""Mesh references only a ROS 2 or simulator resource path can resolve."""
 
 
 def check_description(profile: RobotProfile, profile_path: Path) -> Report:
@@ -254,6 +251,39 @@ def _check_structure(profile: RobotProfile, model: UrdfModel, report: Report) ->
                 detail={"described": model.name, "profile": profile.name},
             )
         )
+    _check_base(profile, model, report)
+
+
+def _check_base(profile: RobotProfile, model: UrdfModel, report: Report) -> None:
+    """A free base with the built-in controller switched off holds nothing up.
+
+    Two facts from two sources, neither alarming alone: the profile says the
+    built-in controller is off (access level ``low``), the description says the
+    tree is not bolted to the world. Together they say the robot will not stand,
+    and a skill run on it moves the joints of a robot lying on the floor. That is
+    a condition of the run, and it is stated before the run rather than
+    discovered by watching it (ADR-0018).
+    """
+    if AccessLevel.LOW not in profile.access_levels or model.fixed_to_world:
+        return
+    report.add(
+        warning(
+            "urdf.free_base_uncontrolled",
+            f"profile:{profile.name}.description",
+            f"база {model.root_link or '—'} не закреплена в описании, а уровень "
+            f"доступа low отключает встроенный контроллер",
+            hint=(
+                "равновесие не держит никто: в мире робот ляжет на первом шаге "
+                "физики, и навык будет двигать суставы лежащего робота. Это условие "
+                "прогона — записывайте его рядом с результатом"
+            ),
+            adr="ADR-0018",
+            detail={
+                "root_link": model.root_link,
+                "access_levels": [str(level) for level in profile.access_levels],
+            },
+        )
+    )
 
 
 def _check_meshes(
@@ -264,16 +294,10 @@ def _check_meshes(
     external: list[str] = []
 
     for reference in model.meshes:
-        if reference.startswith(UNRESOLVABLE_SCHEMES):
+        target = resolve_mesh(reference, path, profile.description.mesh_dir)
+        if target is None:
             external.append(reference)
-            continue
-        target = Path(reference.removeprefix("file://"))
-        if not target.is_absolute():
-            base = path.parent
-            if profile.description.mesh_dir:
-                base = path.parent / profile.description.mesh_dir
-            target = base / target
-        if not target.is_file():
+        elif not target.is_file():
             unresolved.append(reference)
 
     if unresolved:
