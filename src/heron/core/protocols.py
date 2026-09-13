@@ -1,8 +1,8 @@
-"""The four extension points of the platform (ARCHITECTURE.md, section 5).
+"""The five extension points of the platform (ARCHITECTURE.md, section 5).
 
 Everything vendor-specific implements one of these from outside the core. A new
 extension point is a decision, recorded in ``docs/decisions/``, not an edit to
-this file.
+this file. The fifth -- the twin -- is ADR-0021.
 
 They are ``Protocol`` classes rather than base classes on purpose: a vendor
 package must not have to import the platform to satisfy them, and invariant 1
@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 from .capabilities import Capability
-from .enums import ControlMode, Status
+from .enums import ControlMode, Status, TwinKind
 from .models import Limits, RobotProfile, Scenario
 from .types import Command, Pose, RobotState
 
@@ -110,6 +110,30 @@ class SimBackend(Protocol):
     def start(self) -> None: ...
 
     def stop(self) -> None: ...
+
+
+@runtime_checkable
+class Twin(Protocol):
+    """The other side of a link in simulation (ADR-0021, ADR-0024).
+
+    An adapter is one side of a link. On hardware the robot is the other; in a
+    simulator something has to speak the robot's protocol in its place, and only
+    whoever wrote the adapter knows that protocol. So a robot package ships the
+    pair, and a twin names the adapter and the backend it answers for.
+
+    This is the part every twin shares. What a twin contributes to a scene is
+    phrased in the vocabulary of its backend -- a Gazebo twin adds interfaces to
+    a description and nodes to a launch, a simulator of its own is a process --
+    and each backend declares that protocol next to itself.
+    """
+
+    adapter: str
+    """Plugin name of the adapter, exactly as a profile writes it."""
+
+    backend: str
+    """The ``world.backend`` this twin lives in."""
+
+    kind: TwinKind
 
 
 @runtime_checkable

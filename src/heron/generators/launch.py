@@ -25,8 +25,9 @@ from xml.etree import ElementTree as ET
 
 from ..core.models import Scenario
 from .common import XML_COMMENT, GeneratedFile, Instance, header, namespace, xml_text
-from .ros2_control import description_path, spawner_arguments
+from .description import description_path
 from .rviz import RVIZ_FILE, frame_prefix
+from .twin import require_twin
 
 LAUNCH_FILE: Final = "bringup.launch.xml"
 BUNDLE_VAR: Final = "bundle"
@@ -54,8 +55,6 @@ deliberately, and not a line that works on one machine."""
 CLOCK_BRIDGE: Final = "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"
 """One bridge, one topic: without simulated time every node timestamps with the
 wall clock, and a run recorded that way cannot be replayed (ADR-0003)."""
-
-SPAWNER_TIMEOUT: Final = "60"
 
 TEXT_PARAM: Final = "str"
 """Declared type of every parameter whose value is free text.
@@ -144,20 +143,13 @@ def _robot(parent: ET.Element, instance: Instance) -> None:
             },
         )
         return
-    for controller in spawner_arguments(instance):
-        ET.SubElement(
-            group,
-            "node",
-            {
-                "pkg": "controller_manager",
-                "exec": "spawner",
-                "name": f"spawn_{controller}",
-                "args": (
-                    f"{controller} --controller-manager controller_manager "
-                    f"--controller-manager-timeout {SPAWNER_TIMEOUT}"
-                ),
-            },
-        )
+    # What drives the robot is the twin's to start; this module does not know
+    # whose controller it is writing down (ADR-0021).
+    for node in require_twin(instance).launch_nodes(instance):
+        attributes = {"pkg": node.package, "exec": node.executable, "name": node.name}
+        if node.arguments:
+            attributes["args"] = " ".join(node.arguments)
+        ET.SubElement(group, "node", attributes)
 
 
 def launch_tree(instances: Sequence[Instance], world: str) -> ET.Element:

@@ -100,6 +100,20 @@ class Role(StrEnum):
     """An obstacle."""
 
 
+class TwinKind(StrEnum):
+    """What the other side of a link in simulation is (ADR-0021).
+
+    Declared by the twin, never inferred: whether a vendor's program steps the
+    physics itself decides whether anything else may share its scene (ADR-0002).
+    """
+
+    OWNS_PHYSICS = "owns_physics"
+    """A whole simulator of its own. Its scene holds exactly one robot."""
+
+    BRIDGE = "bridge"
+    """Code running inside the world of a backend. Bridges share a scene."""
+
+
 class Severity(StrEnum):
     """Severity of a validator finding."""
 

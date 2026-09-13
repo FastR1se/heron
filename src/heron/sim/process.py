@@ -71,8 +71,15 @@ class SubprocessProcess:
         return self.handle.wait(timeout=timeout)
 
 
+@dataclass(slots=True)
 class SubprocessLauncher:
-    """Starts processes for real."""
+    """Starts processes for real, and remembers what it started.
+
+    The command that started a world waits on these, so it has to know them
+    without knowing which backend asked for them (ADR-0021).
+    """
+
+    processes: list[Process] = field(default_factory=list)
 
     def start(
         self,
@@ -86,7 +93,13 @@ class SubprocessLauncher:
             cwd=str(cwd) if cwd is not None else None,
             env=dict(env) if env is not None else None,
         )
-        return SubprocessProcess(command=tuple(command), handle=handle)
+        process = SubprocessProcess(command=tuple(command), handle=handle)
+        self.processes.append(process)
+        return process
+
+    @property
+    def commands(self) -> list[tuple[str, ...]]:
+        return [item.command for item in self.processes]
 
 
 @dataclass(slots=True)

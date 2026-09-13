@@ -21,14 +21,15 @@ from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
 from ..core.enums import Severity
 from ..core.loading import LoadError, load_model, read_yaml
 from ..core.models import RobotProfile, Scenario
+from ..core.plugins import PluginError, load
 from ..generators.bundle import build, build_profile
 from ..generators.common import Bundle, GeneratorError
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
 from ..scenario.loader import load_scenario
 from ..sdk.runner import IncompatibleSkillError
-from ..sim.gazebo import GazeboBackend, SimulationError
-from ..sim.process import PlanningLauncher
+from ..sim.base import SimulationError
+from ..sim.process import PlanningLauncher, SubprocessLauncher
 from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
@@ -219,7 +220,8 @@ def sim_run(
     """Собрать мир и запустить сцену (ADR-0011).
 
     Сцена, не прошедшая проверку, не строится: рассогласование сред — ошибка
-    валидатора, а не странное поведение робота (инвариант 6).
+    валидатора, а не странное поведение робота (инвариант 6). Бэкенд берётся из
+    плагинов по world.backend: имён бэкендов команда не знает (ADR-0021).
     """
     try:
         scenario = load_scenario(scenario_file)
@@ -227,33 +229,44 @@ def sim_run(
         typer.echo(f"не читается  {exc}", err=True)
         raise typer.Exit(EXIT_UNREADABLE) from exc
 
-    planner = PlanningLauncher() if dry_run else None
-    backend = GazeboBackend(
+    try:
+        factory = load("sim", scenario.world.backend)
+    except PluginError as exc:
+        typer.echo(
+            f"мир не поднимается  сцена объявляет владельцем физики "
+            f"{scenario.world.backend!r} — {exc}",
+            err=True,
+        )
+        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+    launcher = PlanningLauncher() if dry_run else SubprocessLauncher()
+    backend = factory(
         _registry(roots),
         into=into,
-        launcher=planner,
+        launcher=launcher,
         scenario_path=scenario_file,
         gui=gui,
         rviz=rviz,
     )
     try:
-        world = backend.build_world(scenario)
+        backend.build_world(scenario)
         backend.start()
     except (SimulationError, GeneratorError, LoadError, ProfileNotFoundError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_FOUND_ERRORS) from exc
 
-    typer.echo(f"мир {world.name!r} собран в {world.root}")
-    if planner is not None:
+    typer.echo(f"мир {scenario.name!r} собран в {into.resolve()}")
+    if isinstance(launcher, PlanningLauncher):
         typer.echo("\nбудет выполнено:")
-        for command in planner.commands:
+        for command in launcher.commands:
             typer.echo("  " + " ".join(command))
         raise typer.Exit(EXIT_OK)
 
-    typer.echo(f"запущено: {' '.join(backend.launch_command(world))}")
+    for command in launcher.commands:
+        typer.echo(f"запущено: {' '.join(command)}")
     typer.echo("остановка — Ctrl+C")
     try:
-        for process in list(backend.processes):
+        for process in list(launcher.processes):
             process.wait()
     except KeyboardInterrupt:
         typer.echo("\nостанавливаю")

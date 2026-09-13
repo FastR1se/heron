@@ -1,0 +1,92 @@
+"""A robot package speaks to the platform through the public API only (ADR-0021).
+
+The package of a vendor's robot is the proof that a robot joins through the
+extension points. That proof is false the moment the package imports the
+validator or the command line, and nobody would notice by reading it -- so the
+imports are read by a test.
+"""
+
+from __future__ import annotations
+
+import ast
+import importlib
+from pathlib import Path
+
+import pytest
+
+from conftest import EXAMPLES
+from heron.public import PUBLIC_MODULES
+
+APP_NAME = "heron"
+"""Spelled here on purpose, like in ``test_invariants``: this file hunts for it."""
+
+PLUGINS = EXAMPLES / "plugins"
+
+
+def platform_imports(path: Path) -> list[tuple[int, str]]:
+    """Platform modules a file imports, relative to the package root.
+
+    ``from <pkg>.core import protocols`` names the module ``core.protocols``;
+    ``from <pkg> import core`` names the package ``core`` itself, which opens
+    everything under it and is therefore not public.
+    """
+    found: list[tuple[int, str]] = []
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                head, _, rest = alias.name.partition(".")
+                if head == APP_NAME:
+                    found.append((node.lineno, rest))
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            head, _, rest = node.module.partition(".")
+            if head != APP_NAME:
+                continue
+            for alias in node.names:
+                submodule = f"{rest}.{alias.name}" if rest else alias.name
+                found.append((node.lineno, submodule if submodule in PUBLIC_MODULES else rest))
+    return found
+
+
+def private_imports(root: Path) -> list[str]:
+    offenders: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for line, module in platform_imports(path):
+            if module not in PUBLIC_MODULES:
+                offenders.append(f"{path.relative_to(root)}:{line}: {module or '<пакет>'}")
+    return offenders
+
+
+@pytest.mark.parametrize("module", sorted(PUBLIC_MODULES))
+def test_every_public_module_exists(module: str) -> None:
+    importlib.import_module(f"{APP_NAME}.{module}")
+
+
+def test_a_private_import_is_caught(tmp_path: Path) -> None:
+    """The check itself, on a package made to break it."""
+    package = tmp_path / "vendor_robot"
+    package.mkdir()
+    (package / "adapter.py").write_text(
+        f"from {APP_NAME}.core.protocols import ControlAdapter\n"
+        f"from {APP_NAME}.core import models\n"
+        f"import {APP_NAME}.generators.twin\n"
+        f"from {APP_NAME}.validator.rules import check_scenario\n"
+        f"from {APP_NAME} import cli\n"
+        f"import {APP_NAME}\n",
+        encoding="utf-8",
+    )
+
+    assert private_imports(tmp_path) == [
+        f"{Path('vendor_robot', 'adapter.py')}:4: validator.rules",
+        f"{Path('vendor_robot', 'adapter.py')}:5: <пакет>",
+        f"{Path('vendor_robot', 'adapter.py')}:6: <пакет>",
+    ]
+
+
+def test_robot_packages_import_only_the_public_api() -> None:
+    if not PLUGINS.is_dir():
+        pytest.skip("пакетов роботов в examples/plugins нет")
+    offenders = private_imports(PLUGINS)
+    assert not offenders, "пакет робота обходит публичный API:\n" + "\n".join(offenders)

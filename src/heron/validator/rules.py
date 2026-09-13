@@ -16,9 +16,17 @@ from ..core import capabilities as caps
 from ..core import requires as req
 from ..core.branding import DOCKER_NAMESPACE
 from ..core.contract import Contract, diff
-from ..core.enums import ControlMode, Role
-from ..core.models import PolicyManifest, RobotProfile, Scenario, SkillSpec, sim_target
+from ..core.enums import ControlMode, Role, TwinKind
+from ..core.models import (
+    PolicyManifest,
+    RobotProfile,
+    Scenario,
+    ScenarioRobot,
+    SkillSpec,
+    sim_target,
+)
 from ..core.plugins import PluginError, available
+from ..core.twins import TwinError, find_twin
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
 from .description import check_description
@@ -323,6 +331,7 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
     required_target = sim_target(scenario.world.backend)
     # Two robots may share a profile; its own findings are reported once.
     checked: set[str] = set()
+    participants: list[tuple[ScenarioRobot, RobotProfile]] = []
 
     for robot in scenario.robots:
         spot = f"{where}.robots.{robot.id}"
@@ -342,6 +351,7 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
             )
             continue
 
+        participants.append((robot, profile))
         if required_target not in profile.adapters:
             report.add(
                 error(
@@ -361,6 +371,8 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
         if profile.name not in checked:
             checked.add(profile.name)
             report.extend(check_profile(profile, path=source.path).findings)
+
+    _check_twins(scenario, participants, report)
 
     learners = scenario.learners
     if len(learners) > 1:
@@ -387,3 +399,80 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
                 )
             )
     return report
+
+
+def _check_twins(
+    scenario: Scenario,
+    participants: list[tuple[ScenarioRobot, RobotProfile]],
+    report: Report,
+) -> None:
+    """In a world the platform starts, every driven robot has a twin (ADR-0021).
+
+    Only for a backend installed as a plugin. A backend that is not installed
+    brings no world up -- ``sim run`` refuses it by name -- and the adapter of a
+    scene without one, like the dummy on a bench, is both sides of its own link.
+    An obstacle has no link and needs no twin. An adapter that is not installed
+    is already a warning of its own, and its twin ships in the same package.
+    """
+    backend = scenario.world.backend
+    if backend not in available("sim"):
+        return
+    where = f"scenario:{scenario.name}"
+    target = sim_target(backend)
+    adapters = set(available("adapters"))
+    owners: list[str] = []
+
+    for robot, profile in participants:
+        spec = profile.adapters.get(target)
+        if robot.role is Role.STATIC or spec is None:
+            continue
+        if ":" not in spec.plugin and spec.plugin not in adapters:
+            continue
+        spot = f"{where}.robots.{robot.id}"
+        detail = {"adapter": spec.plugin, "backend": backend}
+        try:
+            twin = find_twin(spec.plugin, backend)
+        except TwinError as exc:
+            report.add(
+                error(
+                    "twin.unloadable",
+                    spot,
+                    str(exc),
+                    hint="двойник устанавливается пакетом робота вместе с адаптером",
+                    adr="ADR-0021",
+                    detail=detail,
+                )
+            )
+            continue
+        if twin is None:
+            report.add(
+                error(
+                    "twin.missing",
+                    spot,
+                    f"у адаптера {spec.plugin!r} нет двойника под бэкенд {backend!r}",
+                    hint=(
+                        "в симуляции другую сторону связи держит двойник, говорящий "
+                        "протоколом робота; его поставляет пакет робота вместе с адаптером"
+                    ),
+                    adr="ADR-0021",
+                    detail=detail,
+                )
+            )
+        elif twin.kind == TwinKind.OWNS_PHYSICS:
+            owners.append(robot.id)
+
+    if owners and len(scenario.robots) > 1:
+        report.add(
+            error(
+                "twin.owns_physics_not_alone",
+                where,
+                f"двойник робота {', '.join(owners)} сам владеет физикой, "
+                f"а участников в сцене {len(scenario.robots)}",
+                hint=(
+                    "такой двойник — целый симулятор производителя; второй участник в нём "
+                    "невозможен, как невозможна сцена из двух движков"
+                ),
+                adr="ADR-0002",
+                detail={"owners": owners, "robots": [item.id for item in scenario.robots]},
+            )
+        )

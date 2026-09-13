@@ -23,14 +23,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
-from ..core.enums import Role
+from ..core.enums import Role, TwinKind
 from ..core.models import RobotProfile, Scenario, ScenarioRobot, World, sim_target
+from ..core.twins import TwinError, find_twin
 from ..core.urdf import parse_urdf
 from ..registry.registry import Registry
-from ..ros2 import names
 from .common import (
     Bundle,
     GeneratedFile,
@@ -40,9 +41,10 @@ from .common import (
     resolve_description,
     sorted_files,
 )
+from .description import description_copy
 from .launch import launch_file
-from .ros2_control import robot_files
 from .rviz import rviz_file
+from .twin import GAZEBO, GazeboTwin
 from .world import WORLD_FILE, world_file
 
 MANIFEST_FILE: Final = "manifest.json"
@@ -52,13 +54,53 @@ MANIFEST_SCHEMA_VERSION: Final = 2
 SOLO_ROLE: Final = Role.SCRIPTED
 """Role a lone profile is generated under: driven, but not by a learner."""
 
-GENERATED_BACKENDS: Final = frozenset({"gazebo"})
+GENERATED_BACKENDS: Final = frozenset({GAZEBO})
 """Backends these generators can actually produce artifacts for.
 
-Everything written here -- the hardware component, the system plugin, the world
-format, the spawn command -- belongs to one simulator. Generating it under
-another backend's name would hand out a bundle that looks right and describes a
-world nobody asked for, so an unsupported backend is refused instead."""
+Everything written here -- the world format, the spawn command, the launch --
+belongs to one simulator. Generating it under another backend's name would hand
+out a bundle that looks right and describes a world nobody asked for, so an
+unsupported backend is refused instead."""
+
+
+def attach_twin(instance: Instance, backend: str) -> Instance:
+    """The instance with the other side of its link attached (ADR-0021).
+
+    Found by the adapter the profile names for this backend, never by the
+    robot: the generators do not know whose twin they are given, and a scene
+    with a vendor's bridge is assembled by exactly the code that assembles one
+    without.
+    """
+    if not instance.controlled:
+        return instance
+    target = sim_target(backend)
+    spec = instance.profile.adapters.get(target)
+    if spec is None:
+        raise GeneratorError(
+            f"{instance.id}: у профиля {instance.profile.name!r} нет адаптера {target!r} "
+            f"(ADR-0002)"
+        )
+    try:
+        twin = find_twin(spec.plugin, backend)
+    except TwinError as exc:
+        raise GeneratorError(f"{instance.id}: {exc}") from exc
+    if twin is None:
+        raise GeneratorError(
+            f"{instance.id}: у адаптера {spec.plugin!r} нет двойника под бэкенд "
+            f"{backend!r} — в сцене некому говорить на языке робота (ADR-0021)"
+        )
+    if not isinstance(twin, GazeboTwin):
+        raise GeneratorError(
+            f"{instance.id}: двойник {type(twin).__name__} не описывает вклад в сцену "
+            f"{backend!r}: нужны description_elements, files, launch_nodes и "
+            f"control_plane (ADR-0024)"
+        )
+    if twin.kind != TwinKind.BRIDGE:
+        raise GeneratorError(
+            f"{instance.id}: двойник {type(twin).__name__} сам владеет физикой, а в этой "
+            f"сцене ею владеет {backend} (ADR-0002)"
+        )
+    return replace(instance, twin=twin)
 
 
 def scenario_instances(
@@ -139,8 +181,8 @@ def _manifest_robot(item: Instance) -> dict[str, Any]:
         "revision": item.profile.contract.revision,
         "description": item.profile.description.urdf,
     }
-    if item.controlled:
-        entry["control"] = names.control_plane(namespace(item), item.profile)
+    if item.twin is not None:
+        entry["control"] = dict(item.twin.control_plane(namespace(item), item.profile))
     return entry
 
 
@@ -215,10 +257,13 @@ def _assemble(
             f"строится"
         )
 
+    instances = [attach_twin(instance, scenario.world.backend) for instance in instances]
     files: list[GeneratedFile] = []
 
     for instance in instances:
-        files.extend(robot_files(instance, root))
+        files.append(description_copy(instance, root))
+        if instance.twin is not None:
+            files.extend(instance.twin.files(instance, root))
 
     if scenario.world.file is None:
         files.append(world_file(scenario, instances))

@@ -6,7 +6,8 @@ Nothing here imports a simulator: the core installs without vendor dependencies
 (section 10), and these modules speak in argument vectors and generated files.
 """
 
-from .gazebo import GazeboBackend, GazeboRobot, GazeboWorld, SimulationError
+from .base import SimBackendFactory, SimulationError
+from .gazebo import GazeboBackend, GazeboRobot, GazeboWorld
 from .process import Launcher, PlanningLauncher, Process, SubprocessLauncher
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "Launcher",
     "PlanningLauncher",
     "Process",
+    "SimBackendFactory",
     "SimulationError",
     "SubprocessLauncher",
 ]

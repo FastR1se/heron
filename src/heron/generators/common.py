@@ -18,11 +18,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from ..core.branding import APP_TITLE
 from ..core.enums import Role
 from ..core.models import RobotProfile
+
+if TYPE_CHECKING:
+    from .twin import GazeboTwin
 
 XML_COMMENT = ("<!--", "-->")
 HASH_COMMENT = ("#", "")
@@ -55,6 +59,11 @@ class Instance:
 
     pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
     role: Role = Role.STATIC
+    twin: GazeboTwin | None = None
+    """The other side of the robot's link in the world (ADR-0021).
+
+    Attached when the scene is assembled, and only to a driven robot: an
+    obstacle has no link, so nothing speaks for it."""
 
     @property
     def directory(self) -> PurePosixPath:

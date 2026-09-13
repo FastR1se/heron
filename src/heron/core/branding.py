@@ -37,6 +37,7 @@ ENTRY_POINT_GROUPS: Final = {
     "sim": f"{APP_NAME}.sim_backends",
     "train": f"{APP_NAME}.train_backends",
     "skills": f"{APP_NAME}.skills",
+    "twins": f"{APP_NAME}.twins",
 }
 """Plugin groups. A third-party package names one of these in its pyproject."""
 

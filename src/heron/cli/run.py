@@ -17,15 +17,16 @@ a run.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from ..core.enums import Role, Status
-from ..core.models import RobotProfile, Scenario, ScenarioRobot, Task, sim_target
+from ..core.models import RobotProfile, Scenario, ScenarioRobot, Task, sim_backend_of, sim_target
 from ..core.plugins import PluginError, load
 from ..core.protocols import ControlAdapter
-from ..generators.bundle import GENERATED_BACKENDS
+from ..core.twins import TwinError, find_twin
+from ..generators.twin import GazeboTwin
 from ..registry.registry import Registry
-from ..ros2 import names
 from ..sdk.executor import Executor, RunResult
 from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..validator.report import Report
@@ -134,6 +135,27 @@ def task_of(scenario: Scenario, skill: str | None, goal: dict[str, Any]) -> Task
     return scenario.task
 
 
+def control_plane(
+    robot: ScenarioRobot, profile: RobotProfile, target: str
+) -> Mapping[str, str | None] | None:
+    """Names of the link as the twin of this adapter states them, if one does.
+
+    A lookup that fails says nothing here: the scenario was validated before a
+    plan is made, and a twin that cannot be loaded is a finding there
+    (``twin.unloadable``), not a line on a plan.
+    """
+    backend = sim_backend_of(target)
+    if backend is None:
+        return None
+    try:
+        twin = find_twin(profile.adapters[target].plugin, backend)
+    except TwinError:
+        return None
+    if not isinstance(twin, GazeboTwin):
+        return None
+    return twin.control_plane(robot.id, profile)
+
+
 def plan(
     scenario: Scenario,
     robot: ScenarioRobot,
@@ -143,14 +165,15 @@ def plan(
 ) -> list[str]:
     """What the run will do, in lines, before it does any of it.
 
-    The control plane is printed from ``ros2.names`` -- the same derivation the
-    generator wrote into the bundle manifest and the adapter subscribes to -- so
-    these lines can be held against ``ros2 topic list`` on the running machine.
+    The control plane is printed from the twin of the link -- the same
+    derivation the generator wrote into the bundle manifest and the adapter
+    subscribes to -- so these lines can be held against ``ros2 topic list`` on
+    the running machine.
 
-    Printed only for a world whose environment this platform generates, because
-    that is exactly when those topics exist. A robot made of numbers has no
-    topics, and naming some for it would put a plausible falsehood on the screen
-    at the moment a human is looking for the truth.
+    Printed only when a twin names it, because that is exactly when those
+    topics exist. A robot made of numbers has no topics, and naming some for it
+    would put a plausible falsehood on the screen at the moment a human is
+    looking for the truth.
     """
     lines = [
         f"сцена     {scenario.name}  (владелец физики {scenario.world.backend})",
@@ -162,8 +185,8 @@ def plan(
         f"темп      команды {profile.contract.command_rate_hz:g} Гц, "
         f"состояние {profile.contract.state_rate_hz:g} Гц",
     ]
-    plane = names.control_plane(robot.id, profile)
-    if scenario.world.backend in GENERATED_BACKENDS and plane["command_topic"] is not None:
+    plane = control_plane(robot, profile, target)
+    if plane is not None and plane.get("command_topic") is not None:
         lines.append(f"состояние {plane['state_topic']}  ({plane['state_message']})")
         lines.append(f"команды   {plane['command_topic']}  ({plane['command_message']})")
     return lines

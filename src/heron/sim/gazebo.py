@@ -26,14 +26,15 @@ from ..core.models import RobotProfile, Scenario, sim_target
 from ..core.types import Pose
 from ..generators.bundle import build
 from ..generators.common import Bundle, Instance, resolve_description
+from ..generators.description import description_copy
 from ..generators.launch import LAUNCH_FILE
-from ..generators.ros2_control import merged_description
+from ..generators.twin import GAZEBO
 from ..registry.registry import Registry
-from ..validator.report import Report
 from ..validator.rules import check_scenario
+from .base import SimulationError
 from .process import Launcher, Process, SubprocessLauncher
 
-BACKEND: Final = "gazebo"
+BACKEND: Final = GAZEBO
 """Name this backend answers to in ``world.backend`` and adapter keys."""
 
 LAUNCH_TOOL: Final = ("ros2", "launch")
@@ -44,16 +45,6 @@ STOP_TIMEOUT: Final = 15.0
 Generous on purpose: a simulator that is killed while holding the graphics
 context leaves the next run without one, and phase 2 is a phase of repeated
 runs."""
-
-
-class SimulationError(RuntimeError):
-    """The world cannot be built or started."""
-
-    def __init__(self, message: str, report: Report | None = None) -> None:
-        self.report = report
-        if report is not None:
-            message = "\n".join([message, *(str(f) for f in report.errors)])
-        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +152,9 @@ class GazeboBackend:
             description=resolve_description(profile, source.path),
             pose=pose.position,
         )
-        generated = merged_description(instance, world.root)
+        # Placed as an obstacle: a robot added to a running world has no
+        # controller manager started for it, so no twin speaks for it.
+        generated = description_copy(instance, world.root)
         target = generated.resolve(world.root)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(generated.content, encoding="utf-8", newline="\n")

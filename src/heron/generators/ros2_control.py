@@ -31,27 +31,35 @@ they are written down; that one decides what they are.
 
 from __future__ import annotations
 
-import copy
-from pathlib import Path, PurePosixPath
+from collections.abc import Mapping
+from dataclasses import replace
+from pathlib import Path
 from typing import Any, Final
 from xml.etree import ElementTree as ET
 
 import yaml
 
+from ..core.enums import TwinKind
 from ..core.models import RobotProfile
 from ..core.units import to_radians
-from ..core.urdf import UrdfModel, parse_urdf, resolve_mesh
+from ..core.urdf import UrdfModel
 from ..ros2 import names
 from .common import (
-    XML_COMMENT,
     GeneratedFile,
     GeneratorError,
     Instance,
     header,
     namespace,
     node_name,
-    xml_text,
 )
+from .description import description_copy
+from .twin import GAZEBO, LaunchNode
+
+ADAPTER: Final = "ros2_control"
+"""Plugin name of the adapter this twin answers for, as ``pyproject.toml``
+registers it and a profile writes it."""
+
+SPAWNER_TIMEOUT: Final = "60"
 
 HARDWARE_PLUGIN: Final = "gz_ros2_control/GazeboSimSystem"
 """Hardware component of the simulator that owns the physics (ADR-0002)."""
@@ -63,7 +71,6 @@ BROADCASTER: Final = names.BROADCASTER
 BROADCASTER_TYPE: Final = names.BROADCASTER_TYPE
 
 CONTROLLERS_FILE: Final = "controllers.yaml"
-DESCRIPTION_FILE: Final = "description.urdf"
 
 
 def command_interface(profile: RobotProfile) -> str:
@@ -177,65 +184,6 @@ def simulator_plugin_block(instance: Instance, controllers: Path) -> ET.Element:
     return element
 
 
-def anchor_meshes(tree: ET.Element, instance: Instance) -> None:
-    """Point every mesh of the copy at the file the input meant (ADR-0017).
-
-    The input may say ``meshes/pelvis.STL`` and be right -- relative to the
-    input. The copy lives in another directory, and the simulator and the
-    visualization receive it as a string with no directory at all, so a relative
-    reference resolves against nothing and the robot arrives without geometry.
-    The reference is resolved exactly as the validator resolved it when it
-    checked the file exists, and written as an absolute ``file://`` URI.
-    References only a resource path can resolve are left as they are.
-    """
-    mesh_dir = instance.profile.description.mesh_dir
-    for mesh in tree.iter("mesh"):
-        reference = mesh.get("filename")
-        if reference is None:
-            continue
-        target = resolve_mesh(reference, instance.description, mesh_dir)
-        if target is not None:
-            mesh.set("filename", target.resolve().as_uri())
-
-
-def merged_description(instance: Instance, root: Path) -> GeneratedFile:
-    """The input description with the derived blocks merged into a copy.
-
-    ADR-0009: not a line of kinematics is written here. The input tree is copied
-    whole -- including everything the platform does not understand -- and two
-    derived elements are appended. Mesh references are anchored to the input,
-    because the copy is read from somewhere else (ADR-0017).
-    """
-    description = parse_urdf(instance.description)
-    tree = copy.deepcopy(description.tree)
-    anchor_meshes(tree, instance)
-
-    for existing in tree.findall("ros2_control"):
-        tree.remove(existing)
-
-    if instance.controlled:
-        tree.append(ros2_control_block(instance, description))
-        tree.append(
-            simulator_plugin_block(
-                instance, (root / Path(*instance.directory.parts) / CONTROLLERS_FILE).resolve()
-            )
-        )
-    else:
-        frozen = ET.Element("gazebo")
-        ET.SubElement(frozen, "static").text = "true"
-        tree.append(frozen)
-
-    head = header(
-        "Итоговое описание робота для запуска",
-        f"{instance.description.name} + профиль {instance.profile.name}",
-        contract_id=instance.profile.contract.contract_id,
-        comment=XML_COMMENT,
-    )
-    return GeneratedFile(
-        path=instance.directory / DESCRIPTION_FILE, content=xml_text(tree, head=head)
-    )
-
-
 def controllers_config(instance: Instance) -> GeneratedFile:
     """Configuration of the controller manager and of the robot's controllers."""
     profile = instance.profile
@@ -285,18 +233,59 @@ def controllers_config(instance: Instance) -> GeneratedFile:
     return GeneratedFile(path=instance.directory / CONTROLLERS_FILE, content=head + body)
 
 
-def robot_files(instance: Instance, root: Path) -> list[GeneratedFile]:
-    """Everything one robot instance contributes to a bundle."""
-    files = [merged_description(instance, root)]
-    if instance.controlled:
-        files.append(controllers_config(instance))
-    return files
-
-
 def spawner_arguments(instance: Instance) -> list[str]:
     """Controllers to start, in the order they must be started in."""
     return [BROADCASTER, controller_name(instance.profile)]
 
 
-def description_path(instance: Instance) -> PurePosixPath:
-    return instance.directory / DESCRIPTION_FILE
+class Ros2ControlTwin:
+    """The platform's own twin: ``ros2_control`` inside the Gazebo world.
+
+    Registered through the same group as a vendor's twin (ADR-0021), for the
+    same reason built-in adapters are: a private path for our own robots would
+    hide whether the public one is good enough. It is also the second
+    implementation of the twin protocol, and the reason that protocol is not
+    shaped after one vendor.
+    """
+
+    adapter = ADAPTER
+    backend = GAZEBO
+    kind = TwinKind.BRIDGE
+
+    def description_elements(
+        self, instance: Instance, description: UrdfModel, root: Path
+    ) -> list[ET.Element]:
+        controllers = (root / Path(*instance.directory.parts) / CONTROLLERS_FILE).resolve()
+        return [
+            ros2_control_block(instance, description),
+            simulator_plugin_block(instance, controllers),
+        ]
+
+    def files(self, instance: Instance, root: Path) -> list[GeneratedFile]:
+        return [controllers_config(instance)]
+
+    def launch_nodes(self, instance: Instance) -> list[LaunchNode]:
+        # A spawner waits for a controller manager that only exists once the
+        # simulator has loaded the model; it waits with its own timeout, not a
+        # generated sleep.
+        return [
+            LaunchNode(
+                package="controller_manager",
+                executable="spawner",
+                name=f"spawn_{controller}",
+                arguments=(
+                    controller,
+                    "--controller-manager", "controller_manager",
+                    "--controller-manager-timeout", SPAWNER_TIMEOUT,
+                ),
+            )
+            for controller in spawner_arguments(instance)
+        ]
+
+    def control_plane(self, namespace: str, profile: RobotProfile) -> Mapping[str, str | None]:
+        return names.control_plane(namespace, profile)
+
+
+def merged_description(instance: Instance, root: Path) -> GeneratedFile:
+    """The copy of the description this twin's robot is started from."""
+    return description_copy(replace(instance, twin=Ros2ControlTwin()), root)
