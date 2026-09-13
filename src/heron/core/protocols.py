@@ -22,6 +22,16 @@ from .models import Limits, RobotProfile, Scenario
 from .types import Command, Pose, RobotState
 
 
+class CommandRefusedError(RuntimeError):
+    """An adapter declined a command, and nothing of it reached the robot (ADR-0026).
+
+    The one failure of ``send_command`` the protocol names, because the executor
+    must tell it from a defect: a refusal is the adapter doing its job -- a
+    position outside the envelope, a command after an emergency stop -- and ends
+    the skill with a reason. Anything else raised there is a bug, and stays one.
+    """
+
+
 @runtime_checkable
 class ControlAdapter(Protocol):
     """Link to a concrete robot or to its twin in a simulator.
@@ -42,7 +52,8 @@ class ControlAdapter(Protocol):
 
     def read_state(self) -> RobotState: ...
 
-    def send_command(self, cmd: Command) -> None: ...
+    def send_command(self, cmd: Command) -> None:
+        """Send one command, or raise ``CommandRefusedError`` and send nothing."""
 
     def capabilities(self) -> frozenset[Capability]:
         """What this link can actually do.

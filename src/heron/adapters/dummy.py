@@ -27,10 +27,12 @@ from ..core.capabilities import Capability, parse_set
 from ..core.enums import ActionType, ControlMode
 from ..core.environment import Requirement
 from ..core.models import Limits, RobotProfile
+from ..core.protocols import CommandRefusedError
 from ..core.types import Command, Pose, RobotState
+from .common import outside_bounds
 
 
-class SafetyViolationError(RuntimeError):
+class SafetyViolationError(CommandRefusedError):
     """A command would leave the envelope the profile declares."""
 
 
@@ -178,14 +180,10 @@ class DummyAdapter:
         self._check_width(values)
         target = [float(v) for v in values]
         if self._enforce_limits and (bounds := self._limits.joint_position) is not None:
-            outside = [
-                i
-                for i, v in enumerate(target)
-                if not (bounds.min[i] <= v <= bounds.max[i])
-            ]
+            outside = outside_bounds(self._require_connected(), target, bounds.min, bounds.max)
             if outside:
                 raise SafetyViolationError(
-                    f"позиции вне лимитов в суставах {outside}; "
+                    f"позиции вне лимитов: {outside}; "
                     f"адаптер не подрезает команду, а отказывает"
                 )
         self._velocity = [(t - p) / self._dt for t, p in zip(target, self._position, strict=True)]

@@ -24,7 +24,7 @@ from heron.adapters.ros2_control import Ros2ControlAdapter
 from heron.core.capabilities import Capability
 from heron.core.enums import ActionType, ControlMode
 from heron.core.models import RobotProfile
-from heron.core.protocols import ControlAdapter
+from heron.core.protocols import CommandRefusedError, ControlAdapter
 from heron.core.types import Command
 from heron.ros2 import names
 from heron.ros2.transport import RecordingTransport
@@ -106,8 +106,14 @@ def test_clock_advances(connected: ControlAdapter) -> None:
 def test_emergency_stop_exists_and_stops(connected: ControlAdapter) -> None:
     """Section 12 makes it mandatory; an adapter without it is not deployable."""
     connected.emergency_stop()
-    with pytest.raises(RuntimeError):
+    with pytest.raises(CommandRefusedError):
         connected.send_command(Command(type=ActionType.JOINT_POSITION, values=(0.0, 0.0, 0.0)))
+
+
+def test_a_command_outside_the_envelope_is_refused_by_name(connected: ControlAdapter) -> None:
+    """The refusal the executor can tell from a defect, naming what it refused (ADR-0026)."""
+    with pytest.raises(CommandRefusedError, match="joint0 = 99"):
+        connected.send_command(Command(type=ActionType.JOINT_POSITION, values=(99.0, 0.0, 0.0)))
 
 
 def test_refuses_use_before_connect(adapter: ControlAdapter) -> None:

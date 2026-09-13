@@ -34,9 +34,11 @@ from ..core.capabilities import Capability, parse_set
 from ..core.enums import ActionType, ControlMode
 from ..core.environment import Requirement, RequirementKind, needs
 from ..core.models import Limits, RobotProfile
+from ..core.protocols import CommandRefusedError
 from ..core.types import Command, RobotState
 from ..ros2 import names
 from ..ros2.transport import Publication, RclpyTransport, Reading, Transport
+from .common import outside_bounds
 
 REQUIREMENTS: Final[tuple[Requirement, ...]] = tuple(
     needs(
@@ -86,7 +88,7 @@ class NotConnectedError(RuntimeError):
     """The adapter was used before ``connect`` or after ``disconnect``."""
 
 
-class SafetyViolationError(RuntimeError):
+class SafetyViolationError(CommandRefusedError):
     """A command would leave the envelope the profile declares."""
 
 
@@ -334,23 +336,21 @@ class Ros2ControlAdapter:
             bounds = self._limits.joint_position
             if bounds is None:
                 return
-            outside = [
-                i
-                for i, v in enumerate(cmd.values)
-                if not (bounds.min[i] <= v <= bounds.max[i])
-            ]
+            outside = outside_bounds(
+                self._require_connected(), cmd.values, bounds.min, bounds.max
+            )
             if outside:
                 raise SafetyViolationError(
-                    f"позиции вне лимитов в суставах {outside}; "
+                    f"позиции вне лимитов: {outside}; "
                     f"адаптер не подрезает команду, а отказывает"
                 )
         elif cmd.type is ActionType.JOINT_VELOCITY:
             limit = self._limits.joint_velocity
             if limit is None:
                 return
-            outside = [i for i, v in enumerate(cmd.values) if abs(v) > limit.max[i]]
-            if outside:
-                raise SafetyViolationError(f"скорости вне лимитов в суставах {outside}")
+            too_fast = [i for i, v in enumerate(cmd.values) if abs(v) > limit.max[i]]
+            if too_fast:
+                raise SafetyViolationError(f"скорости вне лимитов в суставах {too_fast}")
 
     def _publication(self, profile: RobotProfile, values: tuple[float, ...]) -> Publication:
         """One command, as the message its controller subscribes to."""

@@ -71,7 +71,8 @@ readonly MUJOCO_URL="https://github.com/google-deepmind/mujoco/releases/download
 
 readonly DDS_DOMAIN=1                          # the twin's default; the robot uses 0
 readonly SCENE_DOMAIN=42                       # scenes kept apart from the DDS participants
-readonly SCENES="table humanoid"
+SCENES="${SCENES:-table humanoid}"          # SCENES=humanoid bash ... scenes — одна сцена
+readonly SCENES
 readonly RUNTIMES="rmw_fastrtps_cpp rmw_cyclonedds_cpp"   # the old runtime first: a baseline on this commit
 readonly ALL_STEPS="env reqs scenes oneside twin"
 
@@ -741,7 +742,8 @@ scene_once() {  # scene_once <scene> <rmw>
     if (( code == 0 )); then
         record "scenes $label навык" ok "$(grep -m1 -E '^выполнено' "$dir/run.txt")"
     else
-        record "scenes $label навык" "отказ, код $code" "$(grep -m1 -E '^(отказ|причина)|ошибка|не установлена|не хватает' "$dir/run.txt" || tail -1 "$dir/run.txt")"
+        # Lines of the command's own report, not of a traceback that happens to quote them.
+        record "scenes $label навык" "отказ, код $code" "$(grep -E '^(отказ|причина|ошибка)' "$dir/run.txt" | tr '\n' ' ' | grep . || tail -1 "$dir/run.txt")"
     fi
 
     clean "$env_cmd && timeout 60 '$EXEC_PY' '$PY_DIR/joints.py' $APP examples/scenarios/$scene.yaml examples/robots '$dir/after.json' 2 30" > "$dir/after.txt" 2>&1

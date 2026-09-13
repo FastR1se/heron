@@ -34,7 +34,7 @@ from typing import Any, Final, Protocol, runtime_checkable
 
 from ..core.enums import Status
 from ..core.models import RobotProfile, SkillSpec, Task
-from ..core.protocols import ControlAdapter, Skill
+from ..core.protocols import CommandRefusedError, ControlAdapter, Skill
 from ..core.types import Command, RobotState
 from ..skills.library import SkillLibrary
 from .runner import AdapterContext, IncompatibleSkillError, check_runnable
@@ -227,7 +227,19 @@ class Executor:
                 return self._trip(skill, label, tick, seen, ctx, read_at - fresh_at)
 
             ctx.current_time = state.timestamp
-            status = skill.tick(state)
+            try:
+                status = skill.tick(state)
+            except CommandRefusedError as exc:
+                # The adapter did its job; the robot still has to be stopped
+                # before anyone is told (ADR-0026).
+                return self._halt(
+                    skill, label, tick, seen, ctx, f"адаптер отказал в команде: {exc}"
+                )
+            except BaseException as exc:
+                # A defect, or Ctrl+C. Either way the robot is stopped first, and
+                # the exception goes on as it came.
+                self._stop(skill, exc)
+                raise
             if status is not Status.RUNNING:
                 return RunResult(
                     skill=label, status=status, ticks=tick, states=seen, commands=ctx.sent
@@ -265,14 +277,44 @@ class Executor:
         ctx: AdapterContext,
         silence: float,
     ) -> RunResult:
-        """Stop the robot first, report afterwards (section 12)."""
+        """The watchdog: state stopped arriving (section 12)."""
         reason = (
             f"состояние не обновлялось {silence:.3f} с при пороге "
             f"{self.watchdog:.3f} с ({WATCHDOG_PERIODS} периодов при "
             f"{self.profile.contract.state_rate_hz:g} Гц)"
         )
-        self.adapter.emergency_stop()
-        skill.cancel()
+        return self._halt(skill, label, tick, seen, ctx, reason)
+
+    def _stop(self, skill: Skill, cause: BaseException | None = None) -> str | None:
+        """Stop the robot and cancel the skill. Returns why stopping failed, if it did.
+
+        A stop that fails does not replace what caused it: the cause is what a
+        human has to see, and the failed stop is added to it, not put in its place.
+        """
+        try:
+            self.adapter.emergency_stop()
+        except Exception as exc:
+            failure = f"аварийный останов не выполнен: {exc}"
+            if cause is not None:
+                cause.add_note(failure)
+            return failure
+        finally:
+            skill.cancel()
+        return None
+
+    def _halt(
+        self,
+        skill: Skill,
+        label: str,
+        tick: int,
+        seen: list[RobotState],
+        ctx: AdapterContext,
+        reason: str,
+    ) -> RunResult:
+        """Stop the robot first, report afterwards (section 12)."""
+        failure = self._stop(skill)
+        if failure is not None:
+            reason = f"{reason}; {failure}"
         return RunResult(
             skill=label,
             status=Status.FAILURE,

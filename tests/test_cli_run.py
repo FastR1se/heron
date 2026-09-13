@@ -176,6 +176,29 @@ class RefusingAdapter(DummyAdapter):
         raise RuntimeError("окружение не подключено")
 
 
+def test_a_start_pose_outside_the_envelope_is_a_failed_run_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """The second humanoid run, on a robot made of numbers: it starts where the
+    profile does not allow a command, and the first command is refused."""
+    profile = make_profile(
+        name="arm",
+        description=ModelDescription(urdf="urdf/arm.urdf"),
+        adapters={
+            "sim.dummy": AdapterSpec(plugin="dummy", params={"initial_position": [0.0, 0.0, 2.5]})
+        },
+    )
+    write_urdf(tmp_path, "arm", JOINTS)
+    write_profile(tmp_path, profile)
+
+    result = run(scenario(tmp_path), tmp_path)
+
+    assert result.exit_code == EXIT_FOUND_ERRORS, result.output
+    assert "отказ" in result.output
+    assert "joint2 = 2.5 при [-2, 2]" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
 def test_a_link_that_cannot_be_established_is_reported_not_unwound(tmp_path: Path) -> None:
     """A setup failure is reported; it does not come out as a traceback."""
     profile = make_profile(

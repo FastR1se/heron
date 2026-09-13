@@ -187,6 +187,61 @@ def test_a_link_that_keeps_answering_never_trips_the_watchdog() -> None:
     assert result.reason is None
 
 
+# -- refusals --------------------------------------------------------------
+
+
+def test_a_refused_command_stops_the_robot_and_ends_the_skill() -> None:
+    """The second humanoid run: a fallen robot, a start pose outside the envelope,
+    and a refusal that came out of the command as a traceback, with no stop."""
+    profile = make_profile()  # limits ±2.0
+    adapter = DummyAdapter()
+    adapter.connect(profile, {"initial_position": [2.5, 0.0, 0.0]})
+    stopped: list[bool] = []
+    real_stop = adapter.emergency_stop
+    adapter.emergency_stop = lambda: (stopped.append(True), real_stop())  # type: ignore[method-assign]
+
+    result = Executor(adapter, profile, clock=ManualClock()).run(
+        MoveJointsSkill(), {"target": [0.0, 0.0, 0.0], "duration": 1.0}
+    )
+
+    assert result.status is Status.FAILURE
+    assert stopped == [True]
+    assert result.reason is not None
+    assert "joint0 = 2.5 при [-2, 2]" in result.reason
+    assert not result.commands, "отказанная команда не отправлена"
+
+
+def test_a_defect_during_a_tick_stops_the_robot_and_stays_a_defect() -> None:
+    profile = make_profile()
+    adapter = FrozenAdapter(profile)
+
+    class Broken(MoveJointsSkill):
+        def on_tick(self, state: RobotState) -> Status:
+            raise KeyError("ошибка в навыке")
+
+    with pytest.raises(KeyError, match="ошибка в навыке"):
+        Executor(adapter, profile, clock=ManualClock()).run(  # type: ignore[arg-type]
+            Broken(), {"target": [0.1, 0.0, 0.0], "duration": 1.0}
+        )
+    assert adapter.stopped
+
+
+def test_a_stop_that_fails_does_not_hide_the_refusal() -> None:
+    profile = make_profile()
+    adapter = DummyAdapter()
+    adapter.connect(profile, {"initial_position": [2.5, 0.0, 0.0]})
+
+    def failing_stop() -> None:
+        raise RuntimeError("связь потеряна")
+
+    adapter.emergency_stop = failing_stop  # type: ignore[method-assign]
+    result = Executor(adapter, profile, clock=ManualClock()).run(
+        MoveJointsSkill(), {"target": [0.0, 0.0, 0.0], "duration": 1.0}
+    )
+    assert result.reason is not None
+    assert result.reason.index("отказал") < result.reason.index("останов не выполнен")
+
+
 # -- tasks -----------------------------------------------------------------
 
 
