@@ -213,12 +213,18 @@ class Executor:
         for tick in range(1, max_ticks + 1):
             started = self.clock.now()
             state = self.adapter.read_state()
+            read_at = self.clock.now()
             seen.append(state)
 
+            # Freshness counts from the moment a new reading was in hand, not
+            # from the start of the cycle that fetched it. The first read may
+            # spend a second waiting for the link to come up (ADR-0016), and
+            # counting that wait as silence trips the watchdog on a link that has
+            # only just started talking -- the first humanoid run did exactly that.
             if last_stamp is None or state.timestamp != last_stamp:
-                last_stamp, fresh_at = state.timestamp, started
-            elif started - fresh_at > self.watchdog:
-                return self._trip(skill, label, tick, seen, ctx, started - fresh_at)
+                last_stamp, fresh_at = state.timestamp, read_at
+            elif read_at - fresh_at > self.watchdog:
+                return self._trip(skill, label, tick, seen, ctx, read_at - fresh_at)
 
             ctx.current_time = state.timestamp
             status = skill.tick(state)

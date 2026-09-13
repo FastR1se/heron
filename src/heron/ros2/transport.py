@@ -21,12 +21,17 @@ is what a test and a machine without a simulator both need.
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Protocol, runtime_checkable
 
 from . import names
+
+QUEUE_DEPTH: Final = 10
+"""Messages a subscription keeps before dropping the oldest, and so the most a
+single read may have to drain to reach the newest one."""
 
 
 class TransportError(RuntimeError):
@@ -243,14 +248,16 @@ class RclpyTransport:
 
     def advertise(self, topic: str, message_type: str) -> None:
         self._publishers[topic] = self._node.create_publisher(
-            _message_class(message_type), topic, 10
+            _message_class(message_type), topic, QUEUE_DEPTH
         )
 
     def subscribe(self, topic: str, message_type: str) -> None:
         def receive(message: Any) -> None:
             self._latest[topic] = _read(topic, message_type, message)
 
-        self._node.create_subscription(_message_class(message_type), topic, receive, 10)
+        self._node.create_subscription(
+            _message_class(message_type), topic, receive, QUEUE_DEPTH
+        )
 
     def publish(self, message: Publication) -> None:
         publisher = self._publishers.get(message.topic)
@@ -261,9 +268,27 @@ class RclpyTransport:
         publisher.publish(_build(message))
 
     def poll(self, topic: str, timeout: float) -> Reading | None:
+        """The newest message that arrived within ``timeout``, or ``None``.
+
+        One ``spin_once`` runs one callback, and a subscription takes one message
+        per callback. A robot publishing state faster than the loop reads it
+        fills the queue, and the message at its head is up to a full queue old:
+        fresh by the motion of its stamp, stale by its content. So once a message
+        is in hand the queue is drained, and the newest reading is returned.
+        """
         self._latest.pop(topic, None)
-        self._executor.spin_once(timeout_sec=timeout)
-        return self._latest.get(topic)
+        deadline = time.monotonic() + timeout
+        while topic not in self._latest:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self._executor.spin_once(timeout_sec=remaining)
+        for _ in range(QUEUE_DEPTH):
+            before = self._latest[topic]
+            self._executor.spin_once(timeout_sec=0.0)
+            if self._latest[topic] is before:
+                break
+        return self._latest[topic]
 
     def publisher_count(self, topic: str) -> int:
         return int(self._node.count_publishers(topic))

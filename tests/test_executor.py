@@ -138,6 +138,43 @@ def test_state_that_stops_arriving_stops_the_robot() -> None:
     assert result.reason is not None and "не обновлялось" in result.reason
 
 
+def test_waiting_for_the_link_is_not_silence() -> None:
+    """Regression, found by the first humanoid run: the watchdog tripped after
+    two ticks with "1.009 s of silence".
+
+    The first read waited about a second for the link to come up (ADR-0016), the
+    second found no new message within its cycle, and the silence was counted
+    from the start of the first cycle -- that is, from before the link existed."""
+    profile = make_profile()  # 100 Hz state -> 0.5 s watchdog
+    inner = DummyAdapter()
+    inner.connect(profile, {})
+    clock = ManualClock()
+
+    class LateLink:
+        """Takes a second to come up, then misses one cycle."""
+
+        def __init__(self) -> None:
+            self.reads = 0
+            self.last: RobotState | None = None
+
+        def __getattr__(self, item: str) -> object:
+            return getattr(inner, item)
+
+        def read_state(self) -> RobotState:
+            self.reads += 1
+            if self.reads == 1:
+                clock.current += 1.0
+            if self.reads == 2 and self.last is not None:
+                return self.last
+            self.last = inner.read_state()
+            return self.last
+
+    result = Executor(LateLink(), profile, clock=clock).run(  # type: ignore[arg-type]
+        MoveJointsSkill(), {"target": [0.5, 0.0, 0.0], "duration": 0.2}
+    )
+    assert result.status is Status.SUCCESS, result.reason
+
+
 def test_a_link_that_keeps_answering_never_trips_the_watchdog() -> None:
     profile = make_profile()
     adapter = DummyAdapter()
