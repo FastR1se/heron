@@ -21,6 +21,7 @@ PUBLIC_MODULES: Final = frozenset(
         "core.capabilities",
         "core.contract",
         "core.enums",
+        "core.environment",
         "core.models",
         "core.types",
         "core.units",

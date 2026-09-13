@@ -16,7 +16,7 @@ from typing import Annotated, Any
 import typer
 import yaml
 
-from ..core.branding import APP_TITLE, data_home, env_var, image_name, registry_root
+from ..core.branding import APP_NAME, APP_TITLE, data_home, env_var, image_name, registry_root
 from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
 from ..core.enums import Severity
 from ..core.loading import LoadError, load_model, read_yaml
@@ -31,6 +31,7 @@ from ..sdk.runner import IncompatibleSkillError
 from ..sim.base import SimulationError
 from ..sim.process import PlanningLauncher, SubprocessLauncher
 from ..skills.library import SkillLibrary, SkillNotFoundError
+from ..validator.environment import check_environment
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
 from .new_robot import write_stub
@@ -49,10 +50,14 @@ profile_app = typer.Typer(help="Профили роботов.", no_args_is_help
 sim_app = typer.Typer(help="Симуляция: сборка мира и запуск сцены.", no_args_is_help=True)
 contract_app = typer.Typer(help="Контракты: идентичность и сверка.", no_args_is_help=True)
 skill_app = typer.Typer(help="Библиотека навыков.", no_args_is_help=True)
+env_app = typer.Typer(
+    help="Окружение машины: что нужно сторонам связи (ADR-0025).", no_args_is_help=True
+)
 app.add_typer(profile_app, name="profile")
 app.add_typer(contract_app, name="contract")
 app.add_typer(skill_app, name="skill")
 app.add_typer(sim_app, name="sim")
+app.add_typer(env_app, name="env")
 
 RootsOption = Annotated[
     list[Path] | None,
@@ -64,11 +69,11 @@ def _registry(roots: list[Path] | None) -> Registry:
     return Registry(roots or [])
 
 
-def _print(report: Report) -> None:
+def _print(report: Report, *, err: bool = False) -> None:
     """Print findings, errors first: a warning after a stop is noise."""
     for finding in sorted(report, key=lambda f: (f.severity is not Severity.ERROR, f.code)):
         mark = "ошибка " if finding.severity is Severity.ERROR else "внимание"
-        typer.echo(f"{mark}  {finding}")
+        typer.echo(f"{mark}  {finding}", err=err)
     if not report.findings:
         typer.echo("замечаний нет")
         return
@@ -239,9 +244,24 @@ def sim_run(
         )
         raise typer.Exit(EXIT_FOUND_ERRORS) from exc
 
+    registry = _registry(roots)
+    if not dry_run:
+        # Before anything is generated or started: a world whose twin lacks a
+        # package does not fail where it is missing, it fails as a whole
+        # (ADR-0013, ADR-0025).
+        environment = check_environment(scenario, registry, robots=False)
+        if not environment.report.ok:
+            typer.echo(
+                "мир не поднимается  окружению этой машины не хватает того, что нужно "
+                "двойникам сцены:",
+                err=True,
+            )
+            _print(environment.report, err=True)
+            raise typer.Exit(EXIT_FOUND_ERRORS)
+
     launcher = PlanningLauncher() if dry_run else SubprocessLauncher()
     backend = factory(
-        _registry(roots),
+        registry,
         into=into,
         launcher=launcher,
         scenario_path=scenario_file,
@@ -260,6 +280,10 @@ def sim_run(
         typer.echo("\nбудет выполнено:")
         for command in launcher.commands:
             typer.echo("  " + " ".join(command))
+        typer.echo(
+            f"\nокружение не проверялось: сухой прогон ничего не запускает. "
+            f"Проверка — {APP_NAME} env check {scenario_file}"
+        )
         raise typer.Exit(EXIT_OK)
 
     for command in launcher.commands:
@@ -272,6 +296,35 @@ def sim_run(
         typer.echo("\nостанавливаю")
     finally:
         backend.stop()
+
+
+# -- env -------------------------------------------------------------------
+
+
+@env_app.command("check")
+def env_check(
+    scenario_file: Annotated[Path, typer.Argument(help="Файл сценария.")],
+    roots: RootsOption = None,
+) -> None:
+    """Хватит ли этой машине окружения, чтобы поднять сцену и вести её роботов.
+
+    Сначала сценарий проверяется валидатором, затем требования сторон связи
+    каждого управляемого робота: адаптера (их проверяет run) и двойника (их
+    проверяет sim run). Ответ — про эту машину, поэтому validate его не даёт.
+    """
+    try:
+        scenario = load_scenario(scenario_file)
+    except LoadError as exc:
+        typer.echo(f"не читается  {exc}", err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+
+    registry = _registry(roots)
+    environment = check_environment(scenario, registry)
+    for side in environment.checked:
+        typer.echo(f"проверено  {side.where}: требований {side.requirements}")
+    if environment.checked:
+        typer.echo("")
+    _finish(check_scenario(scenario, registry).merged(environment.report))
 
 
 # -- run -------------------------------------------------------------------

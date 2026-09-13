@@ -90,16 +90,23 @@ so it can live in a package of yours, outside the core.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from {pkg}.core.capabilities import Capability
 from {pkg}.core.enums import ControlMode
+from {pkg}.core.environment import Requirement
 from {pkg}.core.models import Limits, RobotProfile
 from {pkg}.core.types import Command, RobotState
 
 
 class {klass}:
     """Link to {name} or to its twin in a simulator."""
+
+    # Что процессу, ведущему робота, нужно от окружения: модули Python, пакеты
+    # ROS 2, программы, переменные — и что в нём запрещено (ADR-0025). Умолчания
+    # нет: пустой кортеж — это объявление «ничего», а не забытое поле.
+    requirements: Sequence[Requirement] = ()  # TODO: needs(...), forbids(...)
 
     def __init__(self) -> None:
         self._profile: RobotProfile | None = None

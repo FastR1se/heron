@@ -50,7 +50,12 @@ class GazeboTwin(Twin, Protocol):
         """Files this robot's link needs next to its description."""
 
     def launch_nodes(self, instance: Instance) -> Sequence[LaunchNode]:
-        """Processes started for this robot, in the order they must start in."""
+        """Processes started for this robot, in the order they must start in.
+
+        Each from a ROS 2 package the twin needs in ``requirements``: a launch
+        naming an absent package takes the whole scene down with it (ADR-0013),
+        and a twin's package is the twin's to declare (ADR-0025).
+        """
 
     def control_plane(self, namespace: str, profile: RobotProfile) -> Mapping[str, str | None]:
         """Names an adapter finds at run time, as written into the manifest (ADR-0014)."""

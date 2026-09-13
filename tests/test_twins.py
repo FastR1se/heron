@@ -29,6 +29,7 @@ from heron.adapters.ros2_control import Ros2ControlAdapter
 from heron.cli import main as cli
 from heron.core import twins as lookup
 from heron.core.enums import TwinKind
+from heron.core.environment import Requirement, RequirementKind, needs
 from heron.core.models import AdapterSpec, RobotProfile, Scenario
 from heron.core.plugins import load
 from heron.core.protocols import Twin
@@ -54,6 +55,9 @@ class VendorBridge:
     adapter = VENDOR
     backend = "gazebo"
     kind = TwinKind.BRIDGE
+    requirements: tuple[Requirement, ...] = (
+        needs(RequirementKind.ROS2, "vendor_bridge", hint="пакет производителя"),
+    )
 
     def description_elements(
         self, instance: Instance, description: UrdfModel, root: Path
@@ -83,16 +87,24 @@ class Mute:
     adapter = VENDOR
     backend = "gazebo"
     kind = TwinKind.BRIDGE
+    requirements = ()
 
 
 class Nameless:
     """Not a twin at all."""
 
 
+class Undeclared(VendorBridge):
+    """Starts a node from a package it does not declare."""
+
+    requirements = ()
+
+
 class HalfKind:
     adapter = VENDOR
     backend = "gazebo"
     kind = "half"
+    requirements = ()
 
 
 def _only(twin: Any) -> Callable[[str, str], Any]:
@@ -226,6 +238,15 @@ def test_a_simulator_of_its_own_cannot_bridge_into_gazebo(
 ) -> None:
     monkeypatch.setattr(generation, "find_twin", _only(VendorSimulator()))
     with pytest.raises(GeneratorError, match="владеет физикой"):
+        build(_scenario(), _registry(tmp_path), into=tmp_path / "out")
+
+
+def test_a_twin_starting_a_node_it_does_not_declare_gets_no_scene(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0013 holds for a vendor's twin as it holds for ours (ADR-0025)."""
+    monkeypatch.setattr(generation, "find_twin", _only(Undeclared()))
+    with pytest.raises(GeneratorError, match="vendor_bridge"):
         build(_scenario(), _registry(tmp_path), into=tmp_path / "out")
 
 

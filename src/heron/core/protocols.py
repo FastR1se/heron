@@ -12,10 +12,12 @@ inheritance chain reaching into robot code.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from .capabilities import Capability
 from .enums import ControlMode, Status, TwinKind
+from .environment import Requirement
 from .models import Limits, RobotProfile, Scenario
 from .types import Command, Pose, RobotState
 
@@ -27,6 +29,12 @@ class ControlAdapter(Protocol):
     The same container image talks to simulation and to hardware; only the
     adapter configuration differs between them (invariant 3).
     """
+
+    requirements: Sequence[Requirement]
+    """What the process driving the robot needs from its environment (ADR-0025).
+
+    Read off the class before anything is constructed or connected, and declared
+    even when empty: a side that says nothing has not been asked."""
 
     def connect(self, profile: RobotProfile, config: dict[str, Any]) -> None: ...
 
@@ -134,6 +142,10 @@ class Twin(Protocol):
     """The ``world.backend`` this twin lives in."""
 
     kind: TwinKind
+
+    requirements: Sequence[Requirement]
+    """What the process starting the world needs for this twin (ADR-0025). The
+    adapter declares its own: the two sides run in different processes."""
 
 
 @runtime_checkable

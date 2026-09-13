@@ -29,6 +29,7 @@ from ..generators.twin import GazeboTwin
 from ..registry.registry import Registry
 from ..sdk.executor import Executor, RunResult
 from ..skills.library import SkillLibrary, SkillNotFoundError
+from ..validator.environment import Machine, check_adapter
 from ..validator.report import Report
 from ..validator.rules import check_scenario
 
@@ -202,6 +203,7 @@ def execute(
     goal: dict[str, Any] | None = None,
     library: SkillLibrary | None = None,
     dry_run: bool = False,
+    machine: Machine | None = None,
 ) -> tuple[list[str], RunResult | None]:
     """Set the run up, then run it. Returns the plan it printed and the result.
 
@@ -232,6 +234,18 @@ def execute(
         # Nothing is connected and nothing is loaded: a dry run must be
         # possible on a machine that has neither the robot nor the plugin.
         return lines, None
+
+    # What the adapter declares it needs is checked before it is constructed:
+    # an unsourced environment is a named finding, not an import error from
+    # somewhere inside connect (ADR-0025).
+    plugin = profile.adapters[chosen].plugin
+    environment = check_adapter(plugin, machine=machine)
+    if not environment.report.ok:
+        raise RunError(
+            f"{robot.id}: окружению этой машины не хватает того, что нужно адаптеру "
+            f"{plugin!r}, запуск отменён:",
+            environment.report,
+        )
 
     adapter = build_adapter(profile, chosen)
     try:

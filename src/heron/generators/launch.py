@@ -23,8 +23,17 @@ from pathlib import PurePosixPath
 from typing import Final
 from xml.etree import ElementTree as ET
 
+from ..core.environment import RequirementKind, needed
 from ..core.models import Scenario
-from .common import XML_COMMENT, GeneratedFile, Instance, header, namespace, xml_text
+from .common import (
+    XML_COMMENT,
+    GeneratedFile,
+    GeneratorError,
+    Instance,
+    header,
+    namespace,
+    xml_text,
+)
 from .description import description_path
 from .rviz import RVIZ_FILE, frame_prefix
 from .twin import require_twin
@@ -37,10 +46,11 @@ LAUNCH_PACKAGES: Final[dict[str, str]] = {
     "ros_gz_bridge": "ros-gz",
     "robot_state_publisher": "robot-state-publisher",
     "joint_state_publisher": "joint-state-publisher",
-    "controller_manager": "ros2-control",
     "rviz2": "desktop",
 }
-"""ROS 2 packages a generated launch may reference, and what installs each.
+"""ROS 2 packages the world's part of a generated launch may reference, and what
+installs each. What a twin starts comes from packages the twin declares among its
+requirements, and the generator refuses a node from any other (ADR-0025).
 
 Declared here because a launch file that names a package the environment does
 not have does not degrade -- it fails to parse, and the whole scene dies with
@@ -144,8 +154,19 @@ def _robot(parent: ET.Element, instance: Instance) -> None:
         )
         return
     # What drives the robot is the twin's to start; this module does not know
-    # whose controller it is writing down (ADR-0021).
-    for node in require_twin(instance).launch_nodes(instance):
+    # whose controller it is writing down (ADR-0021). It does know that a node
+    # from a package nobody declared kills the scene (ADR-0013), and a vendor's
+    # twin is held to that exactly as ours is.
+    twin = require_twin(instance)
+    declared = needed(twin.requirements, RequirementKind.ROS2)
+    for node in twin.launch_nodes(instance):
+        if node.package not in declared:
+            raise GeneratorError(
+                f"{instance.id}: двойник {type(twin).__name__} запускает узел {node.name!r} "
+                f"из пакета {node.package!r}, которого не объявляет в requirements. "
+                f"Файл запуска не деградирует: нет пакета — нет всей сцены "
+                f"(ADR-0013, ADR-0025)"
+            )
         attributes = {"pkg": node.package, "exec": node.executable, "name": node.name}
         if node.arguments:
             attributes["args"] = " ".join(node.arguments)

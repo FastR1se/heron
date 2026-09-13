@@ -20,10 +20,12 @@ Two design points worth keeping:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from ..core.capabilities import Capability, parse_set
 from ..core.enums import ActionType, ControlMode
+from ..core.environment import Requirement
 from ..core.models import Limits, RobotProfile
 from ..core.types import Command, Pose, RobotState
 
@@ -38,6 +40,9 @@ class NotConnectedError(RuntimeError):
 
 class DummyAdapter:
     """An in-memory robot integrating commands on a virtual clock."""
+
+    requirements: Sequence[Requirement] = ()
+    """A robot made of numbers needs nothing from a machine (ADR-0025)."""
 
     def __init__(self) -> None:
         self._profile: RobotProfile | None = None

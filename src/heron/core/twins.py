@@ -31,7 +31,8 @@ def installed_twins() -> list[Twin]:
         twin = factory() if isinstance(factory, type) else factory
         if not isinstance(twin, Twin):
             raise TwinError(
-                f"двойник {ep.name!r} ({ep.value}) не объявляет adapter, backend и kind"
+                f"двойник {ep.name!r} ({ep.value}) не объявляет adapter, backend, kind "
+                f"и requirements"
             )
         try:
             TwinKind(twin.kind)

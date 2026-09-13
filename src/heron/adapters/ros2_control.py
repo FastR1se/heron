@@ -27,14 +27,30 @@ in the right shape is how a position lands in a velocity interface.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from typing import Any, Final
 
 from ..core.capabilities import Capability, parse_set
 from ..core.enums import ActionType, ControlMode
+from ..core.environment import Requirement, RequirementKind, needs
 from ..core.models import Limits, RobotProfile
 from ..core.types import Command, RobotState
 from ..ros2 import names
 from ..ros2.transport import Publication, RclpyTransport, Reading, Transport
+
+REQUIREMENTS: Final[tuple[Requirement, ...]] = tuple(
+    needs(
+        RequirementKind.PYTHON,
+        module,
+        hint=f"пакет ros-<дистрибутив>-{package} (ставит scripts/phase0.sh) и подключённое "
+        f"окружение: source /opt/ros/<дистрибутив>/setup.bash",
+    )
+    for module, package in names.ADAPTER_PACKAGES.items()
+)
+"""What the process driving a robot through ROS 2 has to find (ADR-0025).
+
+Derived from ``ADAPTER_PACKAGES``, the list the transport's imports are held to,
+rather than written a second time: the requirement and the import cannot drift."""
 
 NAMESPACE_PARAM: Final = "namespace"
 """Configuration key naming the robot's namespace.
@@ -84,6 +100,8 @@ class StateMismatchError(RuntimeError):
 
 class Ros2ControlAdapter:
     """Drives a robot through its controllers and reads its broadcaster."""
+
+    requirements: Sequence[Requirement] = REQUIREMENTS
 
     def __init__(self, transport: Transport | None = None) -> None:
         self._transport = transport

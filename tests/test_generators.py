@@ -529,27 +529,65 @@ def test_the_launch_names_only_declared_packages(tmp_path: Path) -> None:
     parse, and the whole scene dies with it (ADR-0013)."""
     import re
 
+    from heron.core.environment import RequirementKind, needed
     from heron.generators.launch import LAUNCH_PACKAGES
+    from heron.generators.ros2_control import Ros2ControlTwin
 
     launch = _launch_of(tmp_path)
     used = set(re.findall(r'pkg="([^"]+)"', launch))
     used |= set(re.findall(r"find-pkg-share ([a-z_0-9]+)", launch))
+    declared = set(LAUNCH_PACKAGES) | needed(Ros2ControlTwin.requirements, RequirementKind.ROS2)
 
     assert used, "в запуске не нашлось ни одного узла"
-    assert used <= set(LAUNCH_PACKAGES), f"необъявленные пакеты: {used - set(LAUNCH_PACKAGES)}"
+    assert used <= declared, f"необъявленные пакеты: {used - declared}"
 
 
-def test_every_declared_package_is_installed_by_phase_zero() -> None:
-    """The other side of the same rule: the environment must provide them."""
-    from conftest import REPO_ROOT
+def test_the_builtin_twin_declares_exactly_the_packages_it_names(tmp_path: Path) -> None:
+    """Derived from what the twin writes, not from what it says (ADR-0025).
+
+    The spawner in the launch, the hardware component in the description, every
+    controller class a configuration can name: a package added to any of them and
+    not to the declaration fails here, and a declared one nobody uses fails too.
+    """
+    import re
+
+    from heron.core.environment import RequirementKind, needed
+    from heron.generators import ros2_control as twin
     from heron.generators.launch import LAUNCH_PACKAGES
+    from heron.ros2 import names
+
+    spawned = set(re.findall(r'pkg="([^"]+)"', _launch_of(tmp_path))) - set(LAUNCH_PACKAGES)
+    classes = {
+        *names.STREAMING_CONTROLLERS.values(),
+        names.TRAJECTORY_CONTROLLER,
+        names.BROADCASTER_TYPE,
+        twin.HARDWARE_PLUGIN,
+    }
+    named = spawned | {item.split("/")[0] for item in classes}
+
+    assert named == set(twin.TWIN_PACKAGES)
+    assert needed(twin.Ros2ControlTwin.requirements, RequirementKind.ROS2) == named
+
+
+@pytest.mark.parametrize("module", ["launch", "ros2_control"])
+def test_every_declared_package_is_installed_by_phase_zero(module: str) -> None:
+    """The other side of the same rule: the environment must provide them."""
+    import importlib
+
+    from conftest import REPO_ROOT
+
+    declared = {
+        "launch": "LAUNCH_PACKAGES",
+        "ros2_control": "TWIN_PACKAGES",
+    }[module]
+    packages = getattr(importlib.import_module(f"heron.generators.{module}"), declared)
 
     script = REPO_ROOT / "scripts" / "phase0.sh"
     if not script.is_file():  # pragma: no cover - the script travels with the repo
         pytest.skip("scripts/phase0.sh отсутствует")
     text = script.read_text(encoding="utf-8")
 
-    missing = sorted({apt for apt in LAUNCH_PACKAGES.values() if apt not in text})
+    missing = sorted({apt for apt in packages.values() if apt not in text})
     assert not missing, f"фаза 0 не ставит: {missing}"
 
 

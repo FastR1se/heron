@@ -94,6 +94,18 @@ jobs:
           uv run heron validate examples/scenarios/bench.yaml --registry examples/robots
           uv run heron validate examples/scenarios/table.yaml --registry examples/robots
 
+      # ADR-0025: проверка окружения — про машину, а не про данные. Сцене на
+      # заглушке не нужно ничего; сцене в Gazebo здесь не хватает ROS 2, и
+      # команда обязана это назвать, а не пройти.
+      - name: Окружение проверяется и называет недостающее
+        run: |
+          uv run heron env check examples/scenarios/bench.yaml --registry examples/robots
+          if uv run heron env check examples/scenarios/table.yaml --registry examples/robots > env-table.txt; then
+            echo "env check прошёл на машине без ROS 2"; cat env-table.txt; exit 1
+          fi
+          grep -F "[env.missing]" env-table.txt
+          grep -F "controller_manager" env-table.txt
+
       # Фаза 2: генераторы не требуют ни симулятора, ни ROS 2 — значит,
       # порождение сред проверяется тем же прогоном, что и установка ядра.
       - name: Среды порождаются и повторно порождаются одинаково

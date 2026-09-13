@@ -31,7 +31,7 @@ they are written down; that one decides what they are.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
@@ -40,6 +40,7 @@ from xml.etree import ElementTree as ET
 import yaml
 
 from ..core.enums import TwinKind
+from ..core.environment import Requirement, RequirementKind, needs
 from ..core.models import RobotProfile
 from ..core.units import to_radians
 from ..core.urdf import UrdfModel
@@ -71,6 +72,34 @@ BROADCASTER: Final = names.BROADCASTER
 BROADCASTER_TYPE: Final = names.BROADCASTER_TYPE
 
 CONTROLLERS_FILE: Final = "controllers.yaml"
+
+TWIN_PACKAGES: Final[dict[str, str]] = {
+    "controller_manager": "ros2-control",
+    "gz_ros2_control": "gz-ros2-control",
+    "joint_state_broadcaster": "ros2-controllers",
+    "joint_trajectory_controller": "ros2-controllers",
+    "position_controllers": "ros2-controllers",
+    "velocity_controllers": "ros2-controllers",
+    "effort_controllers": "ros2-controllers",
+}
+"""ROS 2 packages this twin names, and what installs each.
+
+Named in three places, none of them the launch alone: the hardware component and
+the simulator plugin in the description, the controller classes in their
+configuration, the spawner in the launch. A missing one fails differently in each
+-- a scene that does not parse, a controller that "has no type", a model that
+never gets a controller manager -- and all of it after a world was started. The
+rule of ADR-0013, which held only for the launch, now holds for everything the
+twin writes: a test derives the set from what it writes, and phase 0 installs it."""
+
+REQUIREMENTS: Final[tuple[Requirement, ...]] = tuple(
+    needs(
+        RequirementKind.ROS2,
+        package,
+        hint=f"пакет ros-<дистрибутив>-{installed_by} (ставит scripts/phase0.sh)",
+    )
+    for package, installed_by in TWIN_PACKAGES.items()
+)
 
 
 def command_interface(profile: RobotProfile) -> str:
@@ -251,6 +280,7 @@ class Ros2ControlTwin:
     adapter = ADAPTER
     backend = GAZEBO
     kind = TwinKind.BRIDGE
+    requirements: Sequence[Requirement] = REQUIREMENTS
 
     def description_elements(
         self, instance: Instance, description: UrdfModel, root: Path

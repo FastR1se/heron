@@ -10,6 +10,8 @@ license = { text = "MIT" }
 # Anything that pulls in a simulator, a robot SDK or a training framework
 # belongs to an optional group below, never here.
 dependencies = [
+    # Version conditions of environment requirements are PEP 440 (ADR-0025).
+    "packaging>=23",
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "typer>=0.12",
