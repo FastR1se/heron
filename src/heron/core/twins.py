@@ -45,6 +45,24 @@ def installed_twins() -> list[Twin]:
     return twins
 
 
+def why_missing() -> str | None:
+    """A reason more specific than "nobody ships one", when the machine shows it.
+
+    The platform registers a twin of its own in the group. An installed platform
+    whose group is empty therefore carries metadata older than the declaration --
+    entry points are written at install time and a changed ``pyproject.toml`` does
+    not rewrite them. The first Linux run after the group appeared found exactly
+    that, and was told a robot package was to blame.
+    """
+    if list(entry_points(group=group("twins"))):
+        return None
+    return (
+        "в группе двойников не установлено ни одного, хотя платформа регистрирует в ней "
+        "свой: метаданные установленного пакета старше его pyproject.toml. Переустановите "
+        "пакет платформы (uv sync или pip install -e)"
+    )
+
+
 def find_twin(adapter: str, backend: str) -> Twin | None:
     """The twin answering for this adapter in this backend, if one is installed."""
     matching = [

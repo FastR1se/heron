@@ -205,6 +205,15 @@ ensure_apt() {  # ensure_apt <step> <package>...
         { record "$what" отказ "apt не поставил ${missing[*]}"; return 1; }
 }
 
+twins_group() {
+    "$EXEC_PY" -c "from importlib.metadata import entry_points; print(' '.join(sorted(e.name for e in entry_points(group='$APP.twins'))) or 'пусто')" 2>/dev/null ||
+        echo "не читается"
+}
+
+# Running, not merely present: a child that has exited stays a zombie until it is
+# reaped, and kill -0 answers yes for a zombie.
+running() { local state; state="$(ps -o stat= -p "$1" 2>/dev/null)" && [[ $state != Z* ]]; }
+
 have_sdk_venv() { [[ -x "$1/bin/python" ]] && "$1/bin/python" -c 'import unitree_sdk2py.core.channel' >/dev/null 2>&1; }
 
 # The platform inside a probe venv, without its optional groups: the DDS adapter's
@@ -511,15 +520,31 @@ step_env() {
     info "DISPLAY: ${DISPLAY:-не задан}"
     info "lo: $(ip -o link show lo 2>/dev/null | sed -E 's/.*<([^>]*)>.*/\1/')"
 
-    local ok=1
+    git -C "$REPO_ROOT" status --short 2>/dev/null | sed 's/^/      /'
+
+    local ok=1 before after
     [[ -f "$ROS_SETUP" ]] || { record env отказ "нет $ROS_SETUP (scripts/phase0.sh install ros2)"; ok=0; }
     if [[ ! -x "$EXEC_PY" ]]; then
         record env отказ "нет окружения исполнения $EXEC_VENV (scripts/phase0.sh install exec)"
         ok=0
-    elif ! "$EXEC_PY" -c 'import packaging' >/dev/null 2>&1; then
-        info "в окружении исполнения нет packaging — новой зависимости ядра (ADR-0025); ставится uv sync"
-        clean "cd '$REPO_ROOT' && uv sync --extra sim --extra dev" ||
-            { record env отказ "uv sync не прошёл — причина выше"; ok=0; }
+    else
+        # Always, not only when a dependency is missing: entry points are written at
+        # install time, and run 1 went on an install older than the twin group
+        # (journal, session 9). The run tests this commit, not an old install of it.
+        before="$(twins_group)"
+        info "группа двойников в окружении исполнения до синхронизации: $before"
+        info "окружение исполнения синхронизируется с pyproject.toml этого коммита (uv sync, группы sim dev)"
+        if clean "cd '$REPO_ROOT' && uv sync --extra sim --extra dev"; then
+            after="$(twins_group)"
+            info "после: $after"
+            if [[ $after == пусто ]]; then
+                record env отказ "после uv sync группа двойников пуста — встроенный двойник не установлен"; ok=0
+            elif [[ $before != "$after" ]]; then
+                record "env установка" "была устаревшей" "группа двойников до синхронизации: $before, после: $after"
+            fi
+        else
+            record env отказ "uv sync не прошёл — причина выше"; ok=0
+        fi
     fi
     [[ -x "$CLI" ]] || { record env отказ "нет $CLI"; ok=0; }
     info "из phase4-probe.sh: venv-own-lib $(have_sdk_venv "$VENV_OWN" && echo есть || echo нет), venv-cyclonedds11 $(have_sdk_venv "$VENV_NEW" && echo есть || echo нет), unitree_hg $([[ -f "$PROBE_WS/install/setup.bash" ]] && echo собран || echo нет)"
@@ -635,34 +660,57 @@ real_time_factor() {  # real_time_factor <env command>
     echo "${value:-за 15 с сообщения нет} ($topic)"
 }
 
+# Processes of a scene are recognised by a variable only the scene's commands
+# carry, not by names: run 1 matched "spawner" in the arguments of the desktop's
+# own gvfsd daemons and killed them.
+readonly SCENE_MARK="PHASE4_STAGE1_SCENE=$$"
+
 leftovers() {  # leftovers <label>
-    local pattern='gz sim|parameter_bridge|robot_state_publisher|controller_manager|spawner' left
-    left="$(pgrep -a -f "$pattern" 2>/dev/null)"
-    [[ -n $left ]] || return 0
+    local p left=()
+    for p in $(pgrep -u "$(id -u)"); do
+        grep -qzx "$SCENE_MARK" "/proc/$p/environ" 2>/dev/null && left+=("$p")
+    done
+    (( ${#left[@]} )) || return 0
     info "после остановки остались процессы сцены — убиваются, чтобы не попасть в следующий прогон:"
-    sed 's/^/      /' <<< "$left"
-    pkill -KILL -f "$pattern" 2>/dev/null
-    record "scenes $1 остановка" "остались процессы" "$(wc -l <<< "$left") шт. после TERM группы, убиты"
+    ps -o pid=,args= -p "$(IFS=,; echo "${left[*]}")" | sed 's/^/      /'
+    kill -KILL "${left[@]}" 2>/dev/null
+    record "scenes $1 остановка" "остались процессы" "${#left[@]} шт. после TERM группы, убиты"
 }
 
 scene_once() {  # scene_once <scene> <rmw>
     local scene="$1" rmw="$2" label="$1 ${2#rmw_}" dir="$STAGE_ROOT/scenes/$1-$2"
-    local env_cmd="$ROS_ENV && export RMW_IMPLEMENTATION=$rmw ROS_DOMAIN_ID=$SCENE_DOMAIN && cd '$REPO_ROOT'"
-    local code pgid want other total good bad
+    local env_cmd="$ROS_ENV && export RMW_IMPLEMENTATION=$rmw ROS_DOMAIN_ID=$SCENE_DOMAIN $SCENE_MARK && cd '$REPO_ROOT'"
+    local code pgid reader want other total good bad
     rm -rf "$dir"
     mkdir -p "$dir"
     step "scenes — $scene на $rmw"
-    clean "$env_cmd && ros2 daemon stop" >/dev/null 2>&1
+    clean "$ROS_ENV && export RMW_IMPLEMENTATION=$rmw ROS_DOMAIN_ID=$SCENE_DOMAIN && ros2 daemon stop" >/dev/null 2>&1
 
     start_group "$dir/sim.log" 0 "$env_cmd && exec '$CLI' sim run examples/scenarios/$scene.yaml --into '$dir/gen' -R examples/robots --headless --no-rviz"
     pgid=$LAST_GROUP
     info "sim run: группа $pgid, лог $dir/sim.log"
 
-    clean "$env_cmd && timeout 200 '$EXEC_PY' '$PY_DIR/joints.py' $APP examples/scenarios/$scene.yaml examples/robots '$dir/before.json' 5 150" > "$dir/before.txt" 2>&1
+    # The reader waits up to 150 s for state, but not for a world that is gone:
+    # run 1 waited the full time four times after sim run had refused the scene.
+    start_group "$dir/before.txt" 0 "$env_cmd && exec timeout 200 '$EXEC_PY' '$PY_DIR/joints.py' $APP examples/scenarios/$scene.yaml examples/robots '$dir/before.json' 5 150"
+    reader=$LAST_GROUP
+    while running "$reader"; do
+        if ! running "$pgid"; then
+            info "sim run завершился раньше, чем пришло состояние"
+            stop_group "$reader" 5
+            break
+        fi
+        sleep 1
+    done
+    wait "$reader"
     code=$?
     cat "$dir/before.txt"
     if (( code != 0 )); then
-        record "scenes $label состояние" отказ "$(tail -1 "$dir/before.txt")"
+        if running "$pgid"; then
+            record "scenes $label состояние" отказ "$(tail -1 "$dir/before.txt")"
+        else
+            record "scenes $label состояние" "отказ: sim run завершился" "$(grep -m1 -E '^\[|не |ошибка' "$dir/sim.log" || tail -1 "$dir/sim.log")"
+        fi
         info "хвост лога sim run:"
         tail -40 "$dir/sim.log" | sed 's/^/      /'
         stop_group "$pgid" 30

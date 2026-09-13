@@ -279,6 +279,29 @@ def test_a_driven_robot_without_a_twin_is_an_error(tmp_path: Path) -> None:
     assert not report.ok
 
 
+def test_a_missing_twin_blames_a_robot_package_while_twins_are_installed(tmp_path: Path) -> None:
+    report = check_scenario(_scenario(), _registry(tmp_path, plugin="dummy"))
+    finding = next(item for item in report if item.code == "twin.missing")
+    assert "пакет робота" in (finding.hint or "")
+    assert finding.detail["twins_installed"] is True
+
+
+def test_an_install_older_than_the_twin_group_is_named_as_such(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first Linux run: the platform's own twin absent, a robot package blamed."""
+    monkeypatch.setattr(lookup, "entry_points", lambda **_: [])
+    registry = _registry(tmp_path, plugin="ros2_control")
+
+    report = check_scenario(_scenario(), registry)
+    finding = next(item for item in report if item.code == "twin.missing")
+    assert "uv sync" in (finding.hint or "")
+    assert finding.detail["twins_installed"] is False
+
+    with pytest.raises(GeneratorError, match="старше его pyproject"):
+        build(_scenario(), registry, into=tmp_path / "out")
+
+
 def test_an_obstacle_needs_no_twin(tmp_path: Path) -> None:
     report = check_scenario(_scenario(roles=("static",)), _registry(tmp_path, plugin="dummy"))
     assert "twin.missing" not in report.codes()

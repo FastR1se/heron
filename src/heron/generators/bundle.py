@@ -29,7 +29,7 @@ from typing import Any, Final
 
 from ..core.enums import Role, TwinKind
 from ..core.models import RobotProfile, Scenario, ScenarioRobot, World, sim_target
-from ..core.twins import TwinError, find_twin
+from ..core.twins import TwinError, find_twin, why_missing
 from ..core.urdf import parse_urdf
 from ..registry.registry import Registry
 from .common import (
@@ -85,9 +85,11 @@ def attach_twin(instance: Instance, backend: str) -> Instance:
     except TwinError as exc:
         raise GeneratorError(f"{instance.id}: {exc}") from exc
     if twin is None:
+        stale = why_missing()
         raise GeneratorError(
             f"{instance.id}: у адаптера {spec.plugin!r} нет двойника под бэкенд "
             f"{backend!r} — в сцене некому говорить на языке робота (ADR-0021)"
+            + (f". {stale}" if stale else "")
         )
     if not isinstance(twin, GazeboTwin):
         raise GeneratorError(

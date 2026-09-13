@@ -26,7 +26,7 @@ from ..core.models import (
     sim_target,
 )
 from ..core.plugins import PluginError, available
-from ..core.twins import TwinError, find_twin
+from ..core.twins import TwinError, find_twin, why_missing
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
 from .description import check_description
@@ -445,17 +445,19 @@ def _check_twins(
             )
             continue
         if twin is None:
+            stale = why_missing()
             report.add(
                 error(
                     "twin.missing",
                     spot,
                     f"у адаптера {spec.plugin!r} нет двойника под бэкенд {backend!r}",
-                    hint=(
+                    hint=stale
+                    or (
                         "в симуляции другую сторону связи держит двойник, говорящий "
                         "протоколом робота; его поставляет пакет робота вместе с адаптером"
                     ),
                     adr="ADR-0021",
-                    detail=detail,
+                    detail={**detail, "twins_installed": stale is None},
                 )
             )
         elif twin.kind == TwinKind.OWNS_PHYSICS:
