@@ -133,6 +133,67 @@ def test_reversed_clip_rejected() -> None:
         make_contract(action={"type": ActionType.JOINT_POSITION, "clip": (1.0, -1.0)})
 
 
+# -- gains (ADR-0019) --------------------------------------------------------
+
+
+def _gains(dof: int = 3, kp: float = 60.0, kd: float = 1.0) -> dict[str, Any]:
+    return {
+        "type": ActionType.JOINT_POSITION,
+        "clip": (-1.0, 1.0),
+        "kp": [kp] * dof,
+        "kd": [kd] * dof,
+    }
+
+
+def test_unstated_gains_leave_every_identifier_as_it_was() -> None:
+    """Gains arrived after identifiers were stored. Absent, they are absent
+    from the canonical form too -- the golden identifier above proves it."""
+    assert "kp" not in reference().canonical_json()
+    assert reference().contract_id == GOLDEN_ID
+
+
+def test_gains_change_identity() -> None:
+    """A policy trained against one stiffness is not the same policy against
+    another: the difference shows up in the action, by field."""
+    a = reference()
+    b = variant(action=_gains())
+    c = variant(action=_gains(kp=100.0))
+    assert not compatible(a, b)
+    assert not compatible(b, c)
+    assert [d.field for d in diff(b, c)] == ["action"]
+
+
+def test_gains_are_ordered_like_the_joints() -> None:
+    with pytest.raises(ValueError, match="kp"):
+        make_contract(3, action=_gains(dof=2))
+
+
+def test_gains_come_in_pairs() -> None:
+    action = _gains()
+    del action["kd"]
+    with pytest.raises(ValueError, match="вместе"):
+        make_contract(3, action=action)
+
+
+def test_gains_need_a_position_target() -> None:
+    action = {**_gains(), "type": ActionType.JOINT_VELOCITY}
+    with pytest.raises(ValueError, match="положению"):
+        make_contract(3, action=action)
+
+
+def test_gains_must_hold_and_damp() -> None:
+    with pytest.raises(ValueError, match="kp"):
+        make_contract(3, action=_gains(kp=0.0))
+    with pytest.raises(ValueError, match="kd"):
+        make_contract(3, action=_gains(kd=-1.0))
+
+
+def test_gains_refuse_a_contract_in_degrees() -> None:
+    """A drive takes N*m/rad; the same number per degree would mean another law."""
+    with pytest.raises(ValueError, match="rad"):
+        make_contract(3, angle_unit=AngleUnit.DEG, action=_gains())
+
+
 def test_contract_is_frozen() -> None:
     """An identifier computed from a mutable object is a broken promise."""
     with pytest.raises(ValueError):

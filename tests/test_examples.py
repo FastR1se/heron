@@ -159,6 +159,19 @@ def test_the_vendor_robot_is_found_by_its_directory(robots: Path) -> None:
     assert profile.contract.dof == 23
 
 
+def test_the_vendor_robot_has_compliant_joints(robots: Path) -> None:
+    """Regression, found by pushing the robot over in Gazebo: it fell as a
+    statue. Its action states the drive's gains, so its joints are commanded
+    with effort through the drive's law rather than held by a stiff servo
+    (ADR-0019)."""
+    from heron.ros2 import names
+
+    profile = Registry([robots]).load(G1)
+    assert profile.contract.action.has_gains
+    assert names.command_interface(profile) == "effort"
+    assert names.controller_type(profile) == names.TRAJECTORY_CONTROLLER
+
+
 def test_the_vendor_robot_contract_is_locked(robots: Path) -> None:
     """A profile in its own directory keeps its lock next to it, where
     ``contract lock`` and ``validate`` both look."""

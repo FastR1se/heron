@@ -602,6 +602,46 @@ def test_resource_path_meshes_are_left_alone(tmp_path: Path) -> None:
     assert "package://vendor/badge.dae" in _mesh_references(generated)
 
 
+def _compliant_profile(tmp_path: Path) -> Any:
+    return _profile(
+        tmp_path,
+        contract=make_contract(
+            dof=3,
+            action=ActionSpec(
+                type=ActionType.JOINT_POSITION, kp=[60.0, 100.0, 40.0], kd=[1.0, 2.0, 1.0]
+            ),
+        ),
+        limits=Limits(joint_position=JointRange(min=[-1.0] * 3, max=[1.5] * 3)),
+    )
+
+
+def test_gains_become_the_trajectory_controllers_law(tmp_path: Path) -> None:
+    """ADR-0019: effort command, position and velocity read back, and the
+    contract's coefficients written per joint in the contract's order."""
+    profile = _compliant_profile(tmp_path)
+    document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
+
+    manager = document["/arm1/controller_manager"]["ros__parameters"]
+    assert manager["joint_trajectory_controller"]["type"] == names.TRAJECTORY_CONTROLLER
+    controller = document["/arm1/joint_trajectory_controller"]["ros__parameters"]
+    assert controller["command_interfaces"] == ["effort"]
+    assert controller["state_interfaces"] == ["position", "velocity"]
+    assert controller["gains"] == {
+        "joint0": {"p": 60.0, "d": 1.0},
+        "joint1": {"p": 100.0, "d": 2.0},
+        "joint2": {"p": 40.0, "d": 1.0},
+    }
+
+
+def test_an_effort_interface_is_not_bounded_by_angles(tmp_path: Path) -> None:
+    """Position limits hung on a torque would bound the wrong quantity."""
+    profile = _compliant_profile(tmp_path)
+    generated = merged_description(_instance(tmp_path, profile), tmp_path / "out").content
+
+    assert '<command_interface name="effort"' in generated
+    assert '<param name="min">' not in generated
+
+
 def test_anchoring_meshes_leaves_the_input_alone(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     write_urdf(tmp_path, "arm", list(profile.contract.joint_order), extra=MESH_LINKS)

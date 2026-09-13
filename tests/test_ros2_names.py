@@ -84,6 +84,35 @@ def test_state_interfaces_always_include_position() -> None:
     assert names.state_interfaces(profile) == ["position", "velocity"]
 
 
+def _compliant(observation: list[ObservationTerm] | None = None) -> object:
+    """A streaming position robot whose action states its drive gains."""
+    fields: dict[str, object] = {
+        "action": ActionSpec(type=ActionType.JOINT_POSITION, kp=[60.0] * 3, kd=[1.0] * 3)
+    }
+    if observation is not None:
+        fields["observation"] = observation
+    return make_profile(contract=make_contract(3, **fields))
+
+
+def test_a_position_action_with_gains_is_commanded_with_effort() -> None:
+    """ADR-0019: the law that turns a target into torque runs in the control
+    stack, not in the simulator's servo."""
+    profile = _compliant()
+    assert names.command_interface(profile) == "effort"  # type: ignore[arg-type]
+    assert names.controller_type(profile) == names.TRAJECTORY_CONTROLLER  # type: ignore[arg-type]
+    assert names.command_topic("g1", profile) == (  # type: ignore[arg-type]
+        "/g1/joint_trajectory_controller/joint_trajectory"
+    )
+    assert names.command_message(profile) == names.TRAJECTORY_MESSAGE  # type: ignore[arg-type]
+
+
+def test_gains_bring_the_velocity_they_damp() -> None:
+    """The damping term acts on velocity; a controller asked to damp a velocity
+    nobody reads refuses to start."""
+    profile = _compliant(observation=[ObservationTerm(type=ObservationType.JOINT_POS)])
+    assert names.state_interfaces(profile) == ["position", "velocity"]  # type: ignore[arg-type]
+
+
 # -- the two sides -------------------------------------------------------
 
 

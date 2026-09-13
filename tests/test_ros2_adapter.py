@@ -69,6 +69,28 @@ def test_connect_wires_the_topics_the_generator_creates() -> None:
     assert adapter.topics["state"] == "/arm1/joint_states"
 
 
+def test_a_robot_with_drive_gains_is_driven_through_the_trajectory_controller() -> None:
+    """ADR-0019: the adapter finds the controller the generator configured for a
+    position action closed through gains, and sends it one-point trajectories."""
+    profile = make_profile(
+        contract=make_contract(
+            3,
+            action=ActionSpec(type=ActionType.JOINT_POSITION, kp=[60.0] * 3, kd=[1.0] * 3),
+        )
+    )
+    adapter, transport = connected(profile)
+    assert transport.advertised == {
+        "/arm1/joint_trajectory_controller/joint_trajectory": names.TRAJECTORY_MESSAGE
+    }
+
+    adapter.read_state()
+    adapter.send_command(Command(type=ActionType.JOINT_POSITION, values=(0.1, 0.2, 0.3)))
+    sent = transport.published[-1]
+    assert sent.message_type == names.TRAJECTORY_MESSAGE
+    assert sent.fields["joint_names"] == JOINTS
+    assert sent.fields["points"][0]["positions"] == [0.1, 0.2, 0.3]
+
+
 def test_two_instances_of_one_profile_do_not_share_topics() -> None:
     first, one = connected(namespace="arm1")
     second, two = connected(namespace="arm2")

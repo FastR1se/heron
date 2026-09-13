@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import ActionType, AngleUnit, ObservationType
 
@@ -45,6 +45,13 @@ NORMATIVE_FIELDS: Final = (
     "state_rate_hz",
 )
 """Fields that enter the hash. ``revision`` is deliberately absent."""
+
+GAIN_FIELDS: Final = ("kp", "kd")
+"""Fields of the action that appear in the canonical form only when stated.
+
+Normative when present -- a policy trained against one stiffness is not the same
+policy against another -- and absent from the form when absent, so that every
+identifier made before gains existed stays what it was (ADR-0019)."""
 
 
 class ObservationTerm(BaseModel):
@@ -64,12 +71,26 @@ class ObservationTerm(BaseModel):
 
 
 class ActionSpec(BaseModel):
-    """What the policy emits and how it is bounded."""
+    """What the policy emits and how it is bounded.
+
+    A position action may carry the gains that close it into a torque, in the
+    form a joint drive takes them: ``tau = kp * (q* - q) + kd * (dq* - dq)``.
+    Without them "joint position" means whatever the world that executes it
+    decides -- a stiff servo in one simulator, a spring on the hardware -- and
+    that difference is invisible until a robot behaves differently in each
+    (ADR-0019).
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     type: ActionType
     clip: tuple[float, float] | None = None
+    kp: list[float] | None = None
+    """Stiffness per joint in N*m/rad (N/m for a prismatic joint), ordered like
+    ``joint_order``."""
+
+    kd: list[float] | None = None
+    """Damping per joint in N*m*s/rad (N*s/m), ordered like ``joint_order``."""
 
     @field_validator("clip")
     @classmethod
@@ -77,6 +98,31 @@ class ActionSpec(BaseModel):
         if value is not None and value[0] >= value[1]:
             raise ValueError(f"clip {value}: нижняя граница должна быть меньше верхней")
         return value
+
+    @model_validator(mode="after")
+    def _gains_consistent(self) -> ActionSpec:
+        if (self.kp is None) != (self.kd is None):
+            raise ValueError(
+                "kp и kd задаются вместе: PD-закон без одного из коэффициентов — "
+                "это другой закон, а не тот же с умолчанием"
+            )
+        if self.kp is None or self.kd is None:
+            return self
+        if self.type is not ActionType.JOINT_POSITION:
+            raise ValueError(
+                f"kp и kd замыкают цель по положению в момент; у действия {self.type} "
+                f"цели по положению нет"
+            )
+        if any(value <= 0 for value in self.kp):
+            raise ValueError("kp должен быть положительным: нулевая жёсткость не держит цель")
+        if any(value < 0 for value in self.kd):
+            raise ValueError("kd не может быть отрицательным: это раскачка, а не демпфирование")
+        return self
+
+    @property
+    def has_gains(self) -> bool:
+        """Whether the action is closed into a torque by gains it states."""
+        return self.kp is not None
 
 
 class Contract(BaseModel):
@@ -109,6 +155,23 @@ class Contract(BaseModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _gains_fit_the_joints(self) -> Contract:
+        for name in GAIN_FIELDS:
+            values = getattr(self.action, name)
+            if values is not None and len(values) != len(self.joint_order):
+                raise ValueError(
+                    f"action.{name}: {len(values)} значений при {len(self.joint_order)} "
+                    f"суставах; коэффициенты упорядочены как joint_order"
+                )
+        if self.action.has_gains and self.angle_unit is not AngleUnit.RAD:
+            raise ValueError(
+                "kp и kd заданы в единицах привода (Н·м/рад), а контракт — в градусах: "
+                "один и тот же коэффициент значил бы разное. Контракт с коэффициентами "
+                "объявляет angle_unit: rad"
+            )
+        return self
+
     @property
     def dof(self) -> int:
         return len(self.joint_order)
@@ -116,14 +179,18 @@ class Contract(BaseModel):
     def normative(self) -> dict[str, Any]:
         """The fields that define identity, as plain data."""
         dumped = self.model_dump(mode="json", include=set(NORMATIVE_FIELDS))
+        action = dumped["action"]
+        for name in GAIN_FIELDS:
+            if action.get(name) is None:
+                action.pop(name, None)
         return {name: dumped[name] for name in NORMATIVE_FIELDS}
 
     def canonical_json(self) -> str:
         """Canonical serialization of the normative fields.
 
         Pinned form: keys sorted, no whitespace, ASCII-escaped, floats in
-        Python's shortest round-trip representation. Changing any of these
-        changes every identifier in existence.
+        Python's shortest round-trip representation, unstated gains omitted.
+        Changing any of these changes every identifier in existence.
         """
         return json.dumps(
             self.normative(),

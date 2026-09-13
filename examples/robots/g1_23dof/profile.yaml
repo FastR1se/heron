@@ -24,7 +24,8 @@ description:
   urdf: vendor/unitree_ros/robots/g1_description/g1_23dof.urdf
 
 contract:
-  revision: 1
+  # revision 2: действие получило kp и kd (ADR-0019).
+  revision: 2
   # Порядок — порядок двигателей 23-степенной версии в DDS производителя:
   # ноги 0-11, пояс 12, руки 13-22. Он же порядок суставов в описании.
   joint_order:
@@ -57,8 +58,23 @@ contract:
   observation:
     - {type: joint_pos, scale: 1.0}
     - {type: joint_vel, scale: 0.05}
+  # Цель по положению замыкается в момент законом привода:
+  #   tau = kp * (q* - q) + kd * (dq* - dq)
+  # Без коэффициентов «позиция» в Gazebo — жёсткий сервопривод, а на железе —
+  # пружина; с ними смысл действия один в обоих мирах (ADR-0019). Значения — из
+  # примера производителя g1_low_level_example.py; Н·м/рад и Н·м·с/рад.
   action:
     type: joint_position
+    kp: [60, 60, 60, 100, 40, 40,
+         60, 60, 60, 100, 40, 40,
+         60,
+         40, 40, 40, 40, 40,
+         40, 40, 40, 40, 40]
+    kd: [1, 1, 1, 2, 1, 1,
+         1, 1, 1, 2, 1, 1,
+         1,
+         1, 1, 1, 1, 1,
+         1, 1, 1, 1, 1]
 
 capabilities: [arm.joint_position]
 control_mode: streaming

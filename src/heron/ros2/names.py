@@ -46,6 +46,10 @@ COMMAND_INTERFACES: Final[dict[ActionType, str]] = {
 }
 """Action types that map onto a per-joint command interface."""
 
+EFFORT_INTERFACE: Final = "effort"
+POSITION_INTERFACE: Final = "position"
+VELOCITY_INTERFACE: Final = "velocity"
+
 STATE_INTERFACES: Final[dict[ObservationType, str]] = {
     ObservationType.JOINT_POS: "position",
     ObservationType.JOINT_VEL: "velocity",
@@ -115,8 +119,32 @@ transport, and everything in it must be installed by the phase 0 script."""
 # -- derivations -----------------------------------------------------------
 
 
+def closes_through_gains(profile: RobotProfile) -> bool:
+    """Whether a position target is turned into a torque by the contract's gains.
+
+    Then the joint is commanded with effort, and the law that turns the target
+    into that effort runs inside the control stack, at the rate of the controller
+    manager -- where a joint drive runs it on hardware. Commanding position
+    instead would hand the law to the simulator, which executes it as a stiff
+    servo that no gain in the contract describes (ADR-0019).
+    """
+    return profile.contract.action.has_gains
+
+
+def uses_trajectory_controller(profile: RobotProfile) -> bool:
+    """Command mode, or a position action closed through gains.
+
+    The trajectory controller is the controller of ``ros2_controllers`` that
+    both accepts "reach this" and closes a position error through per-joint
+    gains into an effort command.
+    """
+    return profile.control_mode is ControlMode.COMMAND or closes_through_gains(profile)
+
+
 def command_interface(profile: RobotProfile) -> str | None:
     """The one command interface this robot's action maps onto, if any."""
+    if closes_through_gains(profile):
+        return EFFORT_INTERFACE
     return COMMAND_INTERFACES.get(profile.contract.action.type)
 
 
@@ -126,12 +154,17 @@ def state_interfaces(profile: RobotProfile) -> list[str]:
     Position is always present: without it neither the broadcaster nor a
     visualization has anything to show, and a contract that observes only
     velocity still describes a robot whose joints have positions.
+
+    Velocity joins when the action closes through gains: the damping term acts on
+    it, and a controller asked to damp a velocity nobody reads refuses to start.
     """
-    wanted = {"position"}
+    wanted = {POSITION_INTERFACE}
     for term in profile.contract.observation:
         interface = STATE_INTERFACES.get(term.type)
         if interface is not None:
             wanted.add(interface)
+    if closes_through_gains(profile):
+        wanted.add(VELOCITY_INTERFACE)
     return [name for name in INTERFACE_ORDER if name in wanted]
 
 
@@ -141,14 +174,14 @@ def controller_name(profile: RobotProfile) -> str:
     Derived from what it is driven with, not from what kind of machine it is:
     the core knows capabilities, not types (invariant 7).
     """
-    if profile.control_mode is ControlMode.COMMAND:
+    if uses_trajectory_controller(profile):
         return TRAJECTORY_CONTROLLER_NAME
     return f"{profile.contract.action.type}_controller"
 
 
 def controller_type(profile: RobotProfile) -> str | None:
     """Class of controller, chosen by control mode and action (section 3)."""
-    if profile.control_mode is ControlMode.COMMAND:
+    if uses_trajectory_controller(profile):
         return TRAJECTORY_CONTROLLER
     return STREAMING_CONTROLLERS.get(profile.contract.action.type)
 
@@ -171,7 +204,7 @@ def state_topic(namespace: str) -> str:
 
 def command_topic(namespace: str, profile: RobotProfile) -> str | None:
     """Where this robot's commands go, or ``None`` if its action has no home."""
-    if profile.control_mode is ControlMode.COMMAND:
+    if uses_trajectory_controller(profile):
         return qualified(namespace, controller_name(profile), TRAJECTORY_TOPIC)
     if command_interface(profile) is None:
         return None
@@ -180,7 +213,7 @@ def command_topic(namespace: str, profile: RobotProfile) -> str | None:
 
 def command_message(profile: RobotProfile) -> str | None:
     """Type of message a command becomes, or ``None`` if it becomes none."""
-    if profile.control_mode is ControlMode.COMMAND:
+    if uses_trajectory_controller(profile):
         return TRAJECTORY_MESSAGE
     if command_interface(profile) is None:
         return None

@@ -38,7 +38,6 @@ from xml.etree import ElementTree as ET
 
 import yaml
 
-from ..core.enums import ActionType, ControlMode
 from ..core.models import RobotProfile
 from ..core.units import to_radians
 from ..core.urdf import UrdfModel, parse_urdf, resolve_mesh
@@ -103,9 +102,14 @@ def controller_type(profile: RobotProfile) -> str:
 
 
 def _joint_bounds(profile: RobotProfile, index: int) -> tuple[float, float] | None:
-    """Command bounds for one joint, expressed in the units URDF uses."""
+    """Command bounds for one joint, expressed in the units URDF uses.
+
+    Only a position command interface is bounded by positions. A position action
+    closed through gains is commanded with effort (ADR-0019), and hanging angle
+    limits on a torque would bound the wrong quantity.
+    """
     bounds = profile.limits.joint_position
-    if bounds is None or profile.contract.action.type is not ActionType.JOINT_POSITION:
+    if bounds is None or names.command_interface(profile) != names.POSITION_INTERFACE:
         return None
     unit = profile.contract.angle_unit
     return to_radians(bounds.min[index], unit), to_radians(bounds.max[index], unit)
@@ -244,9 +248,18 @@ def controllers_config(instance: Instance) -> GeneratedFile:
         name: {"type": controller_type(profile)},
     }
     controller: dict[str, Any] = {"joints": joints}
-    if profile.control_mode is ControlMode.COMMAND:
+    if names.uses_trajectory_controller(profile):
         controller["command_interfaces"] = [command_interface(profile)]
         controller["state_interfaces"] = state_interfaces(profile)
+    action = profile.contract.action
+    if action.kp is not None and action.kd is not None:
+        # The law of the joint drive, run by the controller at the manager's
+        # rate: effort = p * position error + d * velocity error. The contract
+        # states the coefficients; nothing here chooses them (ADR-0019).
+        controller["gains"] = {
+            joint: {"p": p, "d": d}
+            for joint, p, d in zip(joints, action.kp, action.kd, strict=True)
+        }
 
     # Where the broadcaster publishes is stated, not inherited. Its default
     # today resolves to <namespace>/joint_states, which is what the adapter
