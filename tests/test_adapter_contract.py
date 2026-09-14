@@ -2,28 +2,38 @@
 
 "Each adapter is run through a shared set of checks" -- this is that set. It is
 written against the protocol, not against ``DummyAdapter``, so a vendor adapter
-can be added to ``ADAPTERS`` and be held to the same standard. Phase 1 left the
+can be added to ``HARNESSES`` and be held to the same standard. Phase 1 left the
 list with one entry and claimed the second would cost nothing; phase 3 added it,
 and it did.
 
-The two entries are not alike, and that is the point of the set. One is a robot
-made of numbers with no outside at all; the other talks to a robot over ROS 2
-topics, and appears here behind a transport that carries nothing (ADR-0014). The
-checks below know about neither -- they ask only what the protocol promises.
+The entries are not alike, and that is the point of the set. One is a robot made
+of numbers with no outside at all; one talks to a robot over ROS 2 topics behind a
+transport that carries nothing (ADR-0014); one is a vendor's package, installed
+beside the platform, talking DDS to a G1 over a channel that carries nothing
+(ADR-0029). The checks below know about none of them -- they ask only what the
+protocol promises.
+
+A harness says what the protocol cannot: which robot this adapter drives, what
+link configuration it needs, and how a running world would give it something to
+read. The vendor's harness comes from its package, which builds its adapter the
+way it builds it for its own tests.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
-from conftest import make_profile
+from conftest import EXAMPLES, make_profile
 from heron.adapters.dummy import DummyAdapter, NotConnectedError, SafetyViolationError
 from heron.adapters.ros2_control import Ros2ControlAdapter
 from heron.core.capabilities import Capability
 from heron.core.enums import ActionType, ControlMode
 from heron.core.models import RobotProfile
+from heron.core.plugins import load
 from heron.core.protocols import CommandRefusedError, ControlAdapter
 from heron.core.types import Command
 from heron.ros2 import names
@@ -32,37 +42,31 @@ from heron.ros2.transport import RecordingTransport
 STATES = 32
 """Readings queued for a link-based adapter, enough for any check below."""
 
+VENDOR_PACKAGE = EXAMPLES / "plugins" / "unitree_g1"
+
+
+@dataclass(frozen=True)
+class Harness:
+    """One adapter, as the shared checks need it."""
+
+    plugin: str
+    """Entry-point name, exactly as a profile writes it."""
+
+    make: Callable[[], ControlAdapter]
+    profile: Callable[[], RobotProfile]
+    config: dict[str, Any] = field(default_factory=dict)
+    prime: Callable[[Any, RobotProfile], None] = lambda adapter, profile: None
+    """Give the adapter something to read, before it connects, as a running world would."""
+
 
 def _over_topics() -> ControlAdapter:
-    """A ros2_control adapter over a transport that carries nothing.
-
-    The queued readings are the part a simulator would supply. Nothing here
-    integrates them or moves anything: the checks in this file are about what
-    the protocol promises, and none of them is about motion.
-    """
+    """A ros2_control adapter over a transport that carries nothing."""
     return Ros2ControlAdapter(RecordingTransport())
 
 
-ADAPTERS: list[Callable[[], ControlAdapter]] = [DummyAdapter, _over_topics]
-
-
-@pytest.fixture(params=ADAPTERS)
-def adapter(request: pytest.FixtureRequest) -> ControlAdapter:
-    return request.param()
-
-
-@pytest.fixture
-def connected(adapter: ControlAdapter, profile: RobotProfile) -> ControlAdapter:
-    adapter.connect(profile, {})
-    _prime(adapter, profile)
-    return adapter
-
-
-def _prime(adapter: ControlAdapter, profile: RobotProfile) -> None:
-    """Give a topic-driven adapter something to read, as a running world would."""
-    transport = getattr(adapter, "transport", None)
-    if not isinstance(transport, RecordingTransport):
-        return
+def _prime_topics(adapter: Any, profile: RobotProfile) -> None:
+    transport = adapter.transport
+    assert isinstance(transport, RecordingTransport)
     dof = profile.contract.dof
     for index in range(STATES):
         transport.deliver_state(
@@ -74,11 +78,77 @@ def _prime(adapter: ControlAdapter, profile: RobotProfile) -> None:
         )
 
 
+def _vendor_harnesses() -> list[Harness]:
+    """The robot packages in ``examples/plugins``, which must be installed to be held.
+
+    A package that is present and not installed fails collection rather than
+    skipping: a contract suite that is green because its subject is missing
+    proves nothing, and nobody would notice it had stopped running.
+    """
+    if not VENDOR_PACKAGE.is_dir():
+        return []
+    try:
+        from unitree_g1 import testing
+    except ImportError as exc:
+        raise ImportError(
+            f"пакет робота {VENDOR_PACKAGE.name} лежит в examples/plugins, но не установлен, "
+            f"и общий набор адаптеров его не проверит: uv pip install -e {VENDOR_PACKAGE}"
+        ) from exc
+    return [
+        Harness(
+            plugin=testing.PLUGIN,
+            make=testing.recording_adapter,
+            profile=testing.profile_23dof,
+            config=dict(testing.LINK_PARAMS),
+            prime=testing.prime,
+        )
+    ]
+
+
+HARNESSES: list[Harness] = [
+    Harness(plugin="dummy", make=DummyAdapter, profile=make_profile),
+    Harness(plugin="ros2_control", make=_over_topics, profile=make_profile, prime=_prime_topics),
+    *_vendor_harnesses(),
+]
+
+
+@pytest.fixture(params=HARNESSES, ids=lambda harness: harness.plugin)
+def harness(request: pytest.FixtureRequest) -> Harness:
+    return request.param  # type: ignore[no-any-return]
+
+
+@pytest.fixture
+def adapter(harness: Harness) -> ControlAdapter:
+    return harness.make()
+
+
+@pytest.fixture
+def robot(harness: Harness) -> RobotProfile:
+    return harness.profile()
+
+
+@pytest.fixture
+def connected(harness: Harness, adapter: ControlAdapter, robot: RobotProfile) -> ControlAdapter:
+    harness.prime(adapter, robot)
+    adapter.connect(robot, dict(harness.config))
+    return adapter
+
+
+def _position(robot: RobotProfile, first: float = 0.0) -> Command:
+    values = (first, *(0.0,) * (robot.contract.dof - 1))
+    return Command(type=ActionType.JOINT_POSITION, values=values)
+
+
 # -- the shared contract ---------------------------------------------------
 
 
 def test_satisfies_the_protocol(adapter: ControlAdapter) -> None:
     assert isinstance(adapter, ControlAdapter)
+
+
+def test_is_found_through_its_entry_point(harness: Harness, adapter: ControlAdapter) -> None:
+    """The platform has no private path to any adapter, its own or a vendor's."""
+    assert type(adapter) is load("adapters", harness.plugin)
 
 
 def test_declares_capabilities(connected: ControlAdapter) -> None:
@@ -91,10 +161,10 @@ def test_declares_control_mode(connected: ControlAdapter) -> None:
     assert isinstance(connected.control_mode(), ControlMode)
 
 
-def test_state_width_matches_contract(connected: ControlAdapter, profile: RobotProfile) -> None:
+def test_state_width_matches_contract(connected: ControlAdapter, robot: RobotProfile) -> None:
     state = connected.read_state()
-    assert len(state.joint_position) == profile.contract.dof
-    assert len(state.joint_velocity) == profile.contract.dof
+    assert len(state.joint_position) == robot.contract.dof
+    assert len(state.joint_velocity) == robot.contract.dof
 
 
 def test_clock_advances(connected: ControlAdapter) -> None:
@@ -103,17 +173,19 @@ def test_clock_advances(connected: ControlAdapter) -> None:
     assert second > first
 
 
-def test_emergency_stop_exists_and_stops(connected: ControlAdapter) -> None:
+def test_emergency_stop_exists_and_stops(connected: ControlAdapter, robot: RobotProfile) -> None:
     """Section 12 makes it mandatory; an adapter without it is not deployable."""
     connected.emergency_stop()
     with pytest.raises(CommandRefusedError):
-        connected.send_command(Command(type=ActionType.JOINT_POSITION, values=(0.0, 0.0, 0.0)))
+        connected.send_command(_position(robot))
 
 
-def test_a_command_outside_the_envelope_is_refused_by_name(connected: ControlAdapter) -> None:
+def test_a_command_outside_the_envelope_is_refused_by_name(
+    connected: ControlAdapter, robot: RobotProfile
+) -> None:
     """The refusal the executor can tell from a defect, naming what it refused (ADR-0026)."""
-    with pytest.raises(CommandRefusedError, match="joint0 = 99"):
-        connected.send_command(Command(type=ActionType.JOINT_POSITION, values=(99.0, 0.0, 0.0)))
+    with pytest.raises(CommandRefusedError, match=f"{robot.contract.joint_order[0]} = 99"):
+        connected.send_command(_position(robot, first=99.0))
 
 
 def test_refuses_use_before_connect(adapter: ControlAdapter) -> None:
@@ -122,9 +194,9 @@ def test_refuses_use_before_connect(adapter: ControlAdapter) -> None:
 
 
 def test_safety_limits_come_from_the_profile(
-    connected: ControlAdapter, profile: RobotProfile
+    connected: ControlAdapter, robot: RobotProfile
 ) -> None:
-    assert connected.safety_limits() == profile.limits
+    assert connected.safety_limits() == robot.limits
 
 
 # -- dummy-specific behaviour ----------------------------------------------

@@ -25,10 +25,13 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Поставить ядро с dev-зависимостями
+      # Фаза 4: пакет робота ставится рядом с платформой, как пакет производителя
+      # (ADR-0021). Общий набор адаптеров его находит и отказывается пройти, если
+      # пакет лежит в examples/plugins, но не установлен.
+      - name: Поставить ядро с dev-зависимостями и пакет робота
         run: |
           uv venv --python 3.11
-          uv pip install -e ".[dev]"
+          uv pip install -e ".[dev]" -e examples/plugins/unitree_g1
 
       # Фаза 4: описание G1 — вход производителя, в репозитории лежат только
       # источник и коммит (ADR-0017). Без загрузки тесты на настоящем файле
@@ -37,13 +40,19 @@ jobs:
         run: uv run python examples/robots/g1_23dof/fetch_description.py
 
       - name: Линтер
-        run: uv run ruff check src tests
+        run: uv run ruff check src tests examples/plugins
 
       - name: Типы
-        run: uv run mypy
+        run: |
+          uv run mypy
+          uv run mypy examples/plugins/unitree_g1/src
 
       - name: Тесты
         run: uv run pytest -v
+
+      # Тесты пакета — на записывающем канале, без CycloneDDS и SDK (ADR-0029).
+      - name: Тесты пакета робота
+        run: uv run pytest -v examples/plugins/unitree_g1/tests
 
   core-without-robots:
     name: Инвариант 1 — ядро без роботов
