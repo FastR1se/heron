@@ -13,14 +13,42 @@ would put mission knowledge into the platform.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from ..core.capabilities import Capability
 from ..core.enums import ControlMode, Status
-from ..core.models import SkillSpec
+from ..core.models import RobotProfile, SkillSpec
 from ..core.protocols import SkillContext
 from ..core.requires import Requirements
 from ..core.types import RobotState
+
+
+def admissible(
+    profile: RobotProfile, pose: Sequence[float]
+) -> tuple[tuple[float, ...], list[str]]:
+    """The pose moved onto the profile's position envelope, and which joints moved (ADR-0032).
+
+    A measured pose can lie outside the envelope a command must lie inside: a
+    joint resting against a soft stop in a simulator, an encoder reading past a
+    soft limit after a stop. A skill that commands the pose it measured then
+    commands something the adapter refuses, and never starts. Each joint is taken
+    to the nearest bound; a joint inside the envelope is not touched.
+    """
+    values = tuple(float(value) for value in pose)
+    bounds = profile.limits.joint_position
+    if bounds is None or len(values) != len(bounds.min):
+        return values, []
+    projected: list[float] = []
+    moved: list[str] = []
+    for name, value, low, high in zip(
+        profile.contract.joint_order, values, bounds.min, bounds.max, strict=True
+    ):
+        nearest = min(max(value, low), high)
+        if nearest != value:
+            moved.append(f"{name} {value:.6g} -> {nearest:.6g}")
+        projected.append(nearest)
+    return tuple(projected), moved
 
 
 class BaseSkill:
@@ -82,3 +110,14 @@ class BaseSkill:
         if self.ctx is None:
             raise RuntimeError("навык не запущен: start() не вызывался")
         return self.ctx
+
+    def admissible_start(self, pose: Sequence[float]) -> tuple[float, ...]:
+        """Where a motion measured from ``pose`` may start, saying so when it is not ``pose``."""
+        projected, moved = admissible(self.context.profile, pose)
+        if moved:
+            self.context.log(
+                "измеренная поза вне рамки limits, движение начинается с ближайшей допустимой",
+                skill=self.spec.name,
+                joints="; ".join(moved),
+            )
+        return projected

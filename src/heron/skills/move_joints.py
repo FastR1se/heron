@@ -115,8 +115,11 @@ class MoveJointsSkill(BaseSkill):
         if self.started_at is None:
             # The first reading defines where "from" is. Taken from the robot
             # and not from the previous command, so that a skill starting after
-            # something else moved the arm ramps from where the arm actually is.
-            self.start_pose = state.joint_position
+            # something else moved the arm ramps from where the arm actually is --
+            # or from the nearest pose inside the envelope, when it rests past a
+            # limit. The target is inside it too, so every point of the ramp is
+            # (ADR-0032).
+            self.start_pose = self.admissible_start(state.joint_position)
             self.started_at = state.timestamp
 
         elapsed = state.timestamp - self.started_at

@@ -10,7 +10,11 @@ Exit codes are part of the interface, because CI depends on them:
 
 from __future__ import annotations
 
+import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from typing import Annotated, Any
 
 import typer
@@ -268,34 +272,57 @@ def sim_run(
         gui=gui,
         rviz=rviz,
     )
-    try:
-        backend.build_world(scenario)
-        backend.start()
-    except (SimulationError, GeneratorError, LoadError, ProfileNotFoundError) as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+    # Whatever ends this command -- the world exiting, Ctrl+C, SIGTERM, a refusal
+    # halfway through starting -- the processes it started end with it: a twin is
+    # a process of its own, and one left behind holds a window and a DDS domain.
+    with _terminate_as_interrupt():
+        try:
+            try:
+                backend.build_world(scenario)
+                backend.start()
+            except (SimulationError, GeneratorError, LoadError, ProfileNotFoundError) as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(EXIT_FOUND_ERRORS) from exc
 
-    typer.echo(f"мир {scenario.name!r} собран в {into.resolve()}")
-    if isinstance(launcher, PlanningLauncher):
-        typer.echo("\nбудет выполнено:")
-        for command in launcher.commands:
-            typer.echo("  " + " ".join(command))
-        typer.echo(
-            f"\nокружение не проверялось: сухой прогон ничего не запускает. "
-            f"Проверка — {APP_NAME} env check {scenario_file}"
-        )
-        raise typer.Exit(EXIT_OK)
+            typer.echo(f"мир {scenario.name!r} собран в {into.resolve()}")
+            if isinstance(launcher, PlanningLauncher):
+                typer.echo("\nбудет выполнено:")
+                for command in launcher.commands:
+                    typer.echo("  " + " ".join(command))
+                typer.echo(
+                    f"\nокружение не проверялось: сухой прогон ничего не запускает. "
+                    f"Проверка — {APP_NAME} env check {scenario_file}"
+                )
+                raise typer.Exit(EXIT_OK)
 
-    for command in launcher.commands:
-        typer.echo(f"запущено: {' '.join(command)}")
-    typer.echo("остановка — Ctrl+C")
+            for command in launcher.commands:
+                typer.echo(f"запущено: {' '.join(command)}")
+            typer.echo("остановка — Ctrl+C")
+            for process in list(launcher.processes):
+                process.wait()
+        except KeyboardInterrupt:
+            typer.echo("\nостанавливаю")
+        finally:
+            backend.stop()
+
+
+@contextmanager
+def _terminate_as_interrupt() -> Iterator[None]:
+    """SIGTERM stops a world the way Ctrl+C does.
+
+    Only Ctrl+C used to: a ``kill``, a service manager or a container runtime
+    ended this process and left the simulator it started running. The handler is
+    restored afterwards, so a caller's own is not lost.
+    """
+
+    def interrupt(signum: int, frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, interrupt)
     try:
-        for process in list(launcher.processes):
-            process.wait()
-    except KeyboardInterrupt:
-        typer.echo("\nостанавливаю")
+        yield
     finally:
-        backend.stop()
+        signal.signal(signal.SIGTERM, previous)
 
 
 # -- env -------------------------------------------------------------------

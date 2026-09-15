@@ -12,7 +12,7 @@ import pytest
 from conftest import make_profile
 from heron.adapters.dummy import DummyAdapter
 from heron.core.enums import ActionType, ControlMode, Status
-from heron.core.models import Task
+from heron.core.models import JointRange, Limits, RobotProfile, Task
 from heron.core.types import RobotState
 from heron.sdk.executor import (
     WATCHDOG_FLOOR_S,
@@ -190,12 +190,25 @@ def test_a_link_that_keeps_answering_never_trips_the_watchdog() -> None:
 # -- refusals --------------------------------------------------------------
 
 
+def _narrow(profile: RobotProfile) -> RobotProfile:
+    """The same robot with an envelope of ±1: an adapter guarding tighter than the profile.
+
+    The way to provoke a refusal now that a skill starts inside the profile's own
+    envelope (ADR-0032): the skill plans against the profile, the link refuses
+    against its own limits.
+    """
+    dof = profile.contract.dof
+    return profile.model_copy(
+        update={"limits": Limits(joint_position=JointRange(min=[-1.0] * dof, max=[1.0] * dof))}
+    )
+
+
 def test_a_refused_command_stops_the_robot_and_ends_the_skill() -> None:
-    """The second humanoid run: a fallen robot, a start pose outside the envelope,
-    and a refusal that came out of the command as a traceback, with no stop."""
+    """The second humanoid run: a refusal that came out of the command as a
+    traceback, with no stop."""
     profile = make_profile()  # limits ±2.0
     adapter = DummyAdapter()
-    adapter.connect(profile, {"initial_position": [2.5, 0.0, 0.0]})
+    adapter.connect(_narrow(profile), {"initial_position": [1.5, 0.0, 0.0]})
     stopped: list[bool] = []
     real_stop = adapter.emergency_stop
     adapter.emergency_stop = lambda: (stopped.append(True), real_stop())  # type: ignore[method-assign]
@@ -207,7 +220,7 @@ def test_a_refused_command_stops_the_robot_and_ends_the_skill() -> None:
     assert result.status is Status.FAILURE
     assert stopped == [True]
     assert result.reason is not None
-    assert "joint0 = 2.5 при [-2, 2]" in result.reason
+    assert "joint0 = 1.5 при [-1, 1]" in result.reason
     assert not result.commands, "отказанная команда не отправлена"
 
 
@@ -229,7 +242,7 @@ def test_a_defect_during_a_tick_stops_the_robot_and_stays_a_defect() -> None:
 def test_a_stop_that_fails_does_not_hide_the_refusal() -> None:
     profile = make_profile()
     adapter = DummyAdapter()
-    adapter.connect(profile, {"initial_position": [2.5, 0.0, 0.0]})
+    adapter.connect(_narrow(profile), {"initial_position": [1.5, 0.0, 0.0]})
 
     def failing_stop() -> None:
         raise RuntimeError("связь потеряна")

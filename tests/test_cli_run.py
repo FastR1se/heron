@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from conftest import make_profile, write_profile, write_urdf
 from heron.adapters.dummy import DummyAdapter
 from heron.cli.main import EXIT_FOUND_ERRORS, EXIT_OK, app
-from heron.core.models import AdapterSpec, ModelDescription
+from heron.core.models import AdapterSpec, JointRange, Limits, ModelDescription, RobotProfile
 
 runner = CliRunner()
 
@@ -176,16 +176,30 @@ class RefusingAdapter(DummyAdapter):
         raise RuntimeError("окружение не подключено")
 
 
-def test_a_start_pose_outside_the_envelope_is_a_failed_run_not_a_traceback(
-    tmp_path: Path,
-) -> None:
-    """The second humanoid run, on a robot made of numbers: it starts where the
-    profile does not allow a command, and the first command is refused."""
+class NarrowAdapter(DummyAdapter):
+    """A link guarding an envelope of ±1, narrower than the profile's ±2.
+
+    A skill starts inside the profile's envelope (ADR-0032), so a refusal is
+    provoked by a link whose own limits are tighter than what the skill plans
+    against.
+    """
+
+    def connect(self, profile: RobotProfile, config: dict[str, object]) -> None:
+        dof = profile.contract.dof
+        narrow = Limits(joint_position=JointRange(min=[-1.0] * dof, max=[1.0] * dof))
+        super().connect(profile.model_copy(update={"limits": narrow}), config)
+
+
+def test_a_refused_command_is_a_failed_run_not_a_traceback(tmp_path: Path) -> None:
+    """The second humanoid run, on a robot made of numbers: the first command is
+    refused, and the run ends with the reason instead of a traceback."""
     profile = make_profile(
         name="arm",
         description=ModelDescription(urdf="urdf/arm.urdf"),
         adapters={
-            "sim.dummy": AdapterSpec(plugin="dummy", params={"initial_position": [0.0, 0.0, 2.5]})
+            "sim.dummy": AdapterSpec(
+                plugin="test_cli_run:NarrowAdapter", params={"initial_position": [0.0, 0.0, 1.5]}
+            )
         },
     )
     write_urdf(tmp_path, "arm", JOINTS)
@@ -195,7 +209,7 @@ def test_a_start_pose_outside_the_envelope_is_a_failed_run_not_a_traceback(
 
     assert result.exit_code == EXIT_FOUND_ERRORS, result.output
     assert "отказ" in result.output
-    assert "joint2 = 2.5 при [-2, 2]" in result.output
+    assert "joint2 = 1.5 при [-1, 1]" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
 
 

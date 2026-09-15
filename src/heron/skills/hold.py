@@ -45,8 +45,10 @@ class HoldSkill(BaseSkill):
             return Status.FAILURE
 
         if self.started_at is None:
-            # First tick defines what "hold" means for this run.
-            self.target = state.joint_position
+            # First tick defines what "hold" means for this run: the pose the
+            # robot is in, moved inside the envelope if it rests past a limit
+            # (ADR-0032).
+            self.target = self.admissible_start(state.joint_position)
             self.started_at = state.timestamp
 
         self.context.send(Command(type=ActionType.JOINT_POSITION, values=self.target))
