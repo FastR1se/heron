@@ -52,7 +52,10 @@ NUM_ENVS="${NUM_ENVS:-512 1024 2048 4096}"
 ITER="${ITER:-50}"
 SEED="${SEED:-42}"
 EXPORT_TIMEOUT="${EXPORT_TIMEOUT:-900}"
-readonly TRAIN_ROOT PROBE_ROOT NUM_ENVS ITER SEED EXPORT_TIMEOUT
+URDF_TIMEOUT="${URDF_TIMEOUT:-900}"       # Kit start plus one conversion; first start compiles shaders
+TRAIN_TIMEOUT="${TRAIN_TIMEOUT:-3600}"    # per size
+HEARTBEAT="${HEARTBEAT:-30}"              # seconds between progress lines of a silent child
+readonly TRAIN_ROOT PROBE_ROOT NUM_ENVS ITER SEED EXPORT_TIMEOUT URDF_TIMEOUT TRAIN_TIMEOUT HEARTBEAT
 readonly TRAIN_VENV="$TRAIN_ROOT/venv"
 readonly TRAIN_PY="$TRAIN_VENV/bin/python"
 readonly ISAACLAB_DIR="$TRAIN_ROOT/IsaacLab"
@@ -111,6 +114,31 @@ cleanup() {
     for pgid in "${STARTED[@]}"; do stop_group "$pgid" 10 >/dev/null 2>&1; done
 }
 trap cleanup EXIT
+
+# A child that writes only to its own log looks exactly like a hung one (probe run 1: the urdf
+# step showed nothing until it was stopped by hand). So every wait says how long it has been and
+# what the child last wrote, and gives up at a deadline with the tail of the log.
+watch_group() {  # watch_group <pgid> <log> <timeout seconds>; status of the child, 124 on timeout
+    local pgid="$1" log="$2" timeout="$3" started last line
+    started="$(date +%s)"; last="$started"
+    info "лог процесса: $log (срок ${timeout} с)"
+    while kill -0 "$pgid" 2>/dev/null; do
+        sleep 1
+        if (( $(date +%s) - last >= HEARTBEAT )); then
+            last="$(date +%s)"
+            line="$(grep -v '^[[:space:]]*$' "$log" 2>/dev/null | tail -n 1 | cut -c1-140)"
+            info "… $(( last - started )) с, строк лога $(wc -l < "$log" 2>/dev/null || echo 0): ${line:-пусто}"
+        fi
+        if (( $(date +%s) - started >= timeout )); then
+            info "срок ${timeout} с истёк — процесс останавливается; хвост лога:"
+            tail -n 30 "$log" 2>/dev/null | sed 's/^/      /'
+            stop_group "$pgid" 15
+            wait "$pgid" 2>/dev/null
+            return 124
+        fi
+    done
+    wait "$pgid"
+}
 
 version_of() {  # version_of <python> <distribution>
     "${BASE_ENV[@]}" "$1" -c "import importlib.metadata as m; print(m.version('$2'))" 2>/dev/null \
@@ -224,9 +252,10 @@ step_urdf() {
         start_group "$PROBE_ROOT/urdf-merge-$merge.log" "$(isaac_command "$URDF_PROBE" \
             --urdf "$ARM6_URDF" --usd-dir "$PROBE_ROOT/usd-merge-$merge" \
             --merge-fixed-joints "$merge" --out "$json" --headless)"
-        wait "$LAST_GROUP"
+        watch_group "$LAST_GROUP" "$PROBE_ROOT/urdf-merge-$merge.log" "$URDF_TIMEOUT"
+        local status=$?
         if [[ ! -s $json ]]; then
-            record "urdf merge=$merge" отказ "факты не записаны: $PROBE_ROOT/urdf-merge-$merge.log"
+            record "urdf merge=$merge" отказ "факты не записаны (код $status, 124 — срок): $PROBE_ROOT/urdf-merge-$merge.log"
             tail -20 "$PROBE_ROOT/urdf-merge-$merge.log" | sed 's/^/      /'
             continue
         fi
@@ -282,8 +311,9 @@ step_threshold() {
         start_group "$log" "$(isaac_command "$ISAACLAB_DIR/scripts/reinforcement_learning/rsl_rl/train.py" \
             --task "$TASK" --headless --num_envs "$n" --max_iterations "$ITER" --seed "$SEED" \
             --run_name "n$n")"
-        sample "$LAST_GROUP" "$samples"
-        wait "$LAST_GROUP"; status=$?
+        sample "$LAST_GROUP" "$samples" &
+        watch_group "$LAST_GROUP" "$log" "$TRAIN_TIMEOUT"; status=$?
+        wait $! 2>/dev/null   # the sampler ends with the child
         elapsed=$(( $(date +%s) - started ))
         gpu="$(peak "$samples" 2)"; ram="$(peak "$samples" 3)"; swap="$(peak "$samples" 4)"
         iters="$(grep -c 'Learning iteration' "$log")"
@@ -322,6 +352,7 @@ step_export() {
     while [[ ! -s $run/exported/policy.onnx ]] && kill -0 "$LAST_GROUP" 2>/dev/null \
             && (( waited < EXPORT_TIMEOUT )); do
         sleep 2; waited=$(( waited + 2 ))
+        (( waited % HEARTBEAT == 0 )) && info "… $waited с, policy.onnx ещё нет; лог: $(grep -v '^[[:space:]]*$' "$log" | tail -n 1 | cut -c1-140)"
     done
     sleep 3   # the JIT file is written first, the ONNX file second; let the write finish
     stop_group "$LAST_GROUP" 15
