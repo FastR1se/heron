@@ -190,6 +190,30 @@ Isaac Lab **v2.3.0**, коммит `3c6e67b` (28.10.2025), разреженна�
    — как у любого навыка (ADR-0026); `onnxruntime` — группа `onnx`, импорт при загрузке.
 8. **USD — порождённое, не вход.** Кэш конвертации вне репозитория, как каталог набора (ADR-0010).
 
+### Итог этапа 1 (16.09.2026, сессия 18)
+
+| Вопрос | Карточка | Суть |
+|---|---|---|
+| 1.1 | [ADR-0041](../decisions/0041-policy-action-mapping-is-normative.md) | `default_pose`, `action.scale`, `action.offset: zero \| default_pose`; `clip` — над сырым выходом; цели политики в рамке — ошибка валидатора до запуска |
+| 1.2 | [ADR-0042](../decisions/0042-observation-terms-cover-the-contract.md) | термы суставов — ровно `joint_order`; новые `joint_pos_rel`, `target_joint_pos`; ширины выводятся |
+| 1.3 | [ADR-0043](../decisions/0043-learned-skill-goal-is-a-joint-pose.md) | цель — `target`; завершение по состоянию; `tolerance`, `hold_s`, `horizon_s` — от задачи, в манифесте |
+| 1.4 | [ADR-0044](../decisions/0044-training-task-is-the-sixth-extension-point.md) | бэкенд `isaaclab` в ядре процессом; вывод среды — данные; задача обучения — шестая точка (`train_tasks`); `learner` требует `task` |
+| 1.5 | [ADR-0045](../decisions/0045-one-drive-law-in-both-worlds.md) | `kp`/`kd` у `arm6`; явный PD на `state_rate_hz` в обоих мирах; `interpolation_method: none`, точка `time_from_start: 0` |
+| 1.6 | [ADR-0046](../decisions/0046-policy-artifact-and-skill-binding.md) | `policies/<name>/<artifact_id>/`; id от манифеста; `train.json`; привязка `{move_joints: name@id}` в `skills` |
+| 1.7 | [ADR-0047](../decisions/0047-learned-skill.md) | сверка до `connect`, коды `policy.*`, такт, `onnxruntime` в группе `onnx` |
+| 1.8 | [ADR-0048](../decisions/0048-usd-is-derived-and-base-fixing-comes-from-the-description.md) | USD в кэше `data_home()`; `fix_base` из `fixed_to_world`; `arm6.urdf` получает звено `world` |
+
+**Найдено по ходу, меняет этапы 2 и 5:**
+
+- Траекторный контроллер со сплайнами исполнял не закон ADR-0019: желаемая скорость `(q* − q)/T` (исходник
+  `jazzy`). Правка генератора и адаптера — этап 2; первый прогон этапа 5 — `move_joints` путём усилия.
+- База `arm6` в Gazebo свободна с фазы 3: в описании нет звена `world`. Правка входа — этап 2; порождённые
+  сцены меняются ожидаемо.
+- `profile.skills` не участвует в поиске навыка — замены «одной строкой» не было. Привязка — этап 2.
+
+**Факты до кода этапа 3 (Linux, проба):** как импортёр URDF Isaac читает звено `world` при `fix_base`; собирается ли
+среда Isaac Lab объектом конфигурации без регистрации gym-задачи и принимает ли её `RslRlVecEnvWrapper`.
+
 ---
 
 ## Этап 2. Платформа: контракт, артефакт, `LearnedSkill` (Windows)
