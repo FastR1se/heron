@@ -55,7 +55,9 @@ EXPORT_TIMEOUT="${EXPORT_TIMEOUT:-900}"
 URDF_TIMEOUT="${URDF_TIMEOUT:-900}"       # Kit start plus one conversion; first start compiles shaders
 TRAIN_TIMEOUT="${TRAIN_TIMEOUT:-3600}"    # per size
 HEARTBEAT="${HEARTBEAT:-30}"              # seconds between progress lines of a silent child
+DONE_GRACE="${DONE_GRACE:-60}"            # seconds a child may take to exit once its result is in hand
 readonly TRAIN_ROOT PROBE_ROOT NUM_ENVS ITER SEED EXPORT_TIMEOUT URDF_TIMEOUT TRAIN_TIMEOUT HEARTBEAT
+readonly DONE_GRACE
 readonly TRAIN_VENV="$TRAIN_ROOT/venv"
 readonly TRAIN_PY="$TRAIN_VENV/bin/python"
 readonly ISAACLAB_DIR="$TRAIN_ROOT/IsaacLab"
@@ -118,12 +120,32 @@ trap cleanup EXIT
 # A child that writes only to its own log looks exactly like a hung one (probe run 1: the urdf
 # step showed nothing until it was stopped by hand). So every wait says how long it has been and
 # what the child last wrote, and gives up at a deadline with the tail of the log.
-watch_group() {  # watch_group <pgid> <log> <timeout seconds>; status of the child, 124 on timeout
-    local pgid="$1" log="$2" timeout="$3" started last line
+#
+# A result is not an exit (probe run 3: the facts were written 5 s in, and the process then sat in
+# simulation_app.close() until the deadline). With a done-test the wait ends on the result: the
+# child gets DONE_GRACE seconds to exit, is stopped if it does not, and how it ended is a fact of
+# its own in AFTER_DONE. DONE_AFTER is seconds from the start to the result.
+AFTER_DONE=""
+DONE_AFTER=""
+watch_group() {  # watch_group <pgid> <log> <timeout> [done-test]; child's status, 124 on timeout
+    local pgid="$1" log="$2" timeout="$3" done_test="${4:-}" started last line done_at="" status
     started="$(date +%s)"; last="$started"
+    AFTER_DONE=""; DONE_AFTER=""
     info "лог процесса: $log (срок ${timeout} с)"
     while kill -0 "$pgid" 2>/dev/null; do
         sleep 1
+        if [[ -n $done_test && -z $done_at ]] && eval "$done_test"; then
+            done_at="$(date +%s)"; DONE_AFTER=$(( done_at - started ))
+            info "итог получен через ${DONE_AFTER} с; процессу ${DONE_GRACE} с на выход"
+        fi
+        if [[ -n $done_at ]] && (( $(date +%s) - done_at >= DONE_GRACE )); then
+            AFTER_DONE="не вышел за ${DONE_GRACE} с после итога — остановлен"
+            info "$AFTER_DONE; последние строки лога:"
+            tail -n 5 "$log" 2>/dev/null | sed 's/^/      /'
+            stop_group "$pgid" 15
+            wait "$pgid" 2>/dev/null
+            return 0
+        fi
         if (( $(date +%s) - last >= HEARTBEAT )); then
             last="$(date +%s)"
             line="$(grep -v '^[[:space:]]*$' "$log" 2>/dev/null | tail -n 1 | cut -c1-140)"
@@ -137,7 +159,9 @@ watch_group() {  # watch_group <pgid> <log> <timeout seconds>; status of the chi
             return 124
         fi
     done
-    wait "$pgid"
+    wait "$pgid"; status=$?
+    [[ -n $done_at ]] && AFTER_DONE="вышел сам через $(( $(date +%s) - done_at )) с после итога (код $status)"
+    return "$status"
 }
 
 version_of() {  # version_of <python> <distribution>
@@ -254,7 +278,7 @@ step_urdf() {
         start_group "$PROBE_ROOT/urdf-merge-$merge.log" "$(isaac_command "$URDF_PROBE" \
             --urdf "$ARM6_URDF" --usd-dir "$PROBE_ROOT/usd-merge-$merge" \
             --merge-fixed-joints "$merge" --out "$json" --headless)"
-        watch_group "$LAST_GROUP" "$PROBE_ROOT/urdf-merge-$merge.log" "$URDF_TIMEOUT"
+        watch_group "$LAST_GROUP" "$PROBE_ROOT/urdf-merge-$merge.log" "$URDF_TIMEOUT" "[[ -s '$json' ]]"
         local status=$?
         if [[ ! -s $json ]]; then
             record "urdf merge=$merge" отказ "факты не записаны (код $status, 124 — срок): $PROBE_ROOT/urdf-merge-$merge.log"
@@ -274,7 +298,7 @@ for key in ("joint_pos_limits", "joint_vel_limits", "joint_effort_limits",
             "joint_stiffness", "joint_damping", "default_joint_pos"):
     print(f"      {key}: {facts.get(key)}")
 PY
-        record "urdf merge=$merge" факт "$json"
+        record "urdf merge=$merge" факт "$json; факты через ${DONE_AFTER:-?} с; процесс ${AFTER_DONE:-вышел до проверки}"
     done
 }
 
@@ -310,13 +334,19 @@ step_threshold() {
         base_swap="$(awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{print int((t-f)/1024)}' /proc/meminfo)"
         info "сред $n: фон VRAM $base_gpu МиБ, RAM $base_ram МиБ, своп $base_swap МиБ"
         started="$(date +%s)"
+        touch "$dir/start-n$n"
         start_group "$log" "$(isaac_command "$ISAACLAB_DIR/scripts/reinforcement_learning/rsl_rl/train.py" \
             --task "$TASK" --headless --num_envs "$n" --max_iterations "$ITER" --seed "$SEED" \
             --run_name "n$n")"
         sample "$LAST_GROUP" "$samples" &
-        watch_group "$LAST_GROUP" "$log" "$TRAIN_TIMEOUT"; status=$?
+        # Done: every iteration logged and a checkpoint of this run written after the start. The
+        # final checkpoint follows the last iteration; DONE_GRACE covers it.
+        watch_group "$LAST_GROUP" "$log" "$TRAIN_TIMEOUT" \
+            "(( \$(grep -c 'Learning iteration' '$log') >= $ITER )) && [[ -n \$(find '$RUNS_DIR' -path '*_n$n/model_*.pt' -newer '$dir/start-n$n' -print -quit 2>/dev/null) ]]"
+        status=$?
         wait $! 2>/dev/null   # the sampler ends with the child
-        elapsed=$(( $(date +%s) - started ))
+        elapsed="${DONE_AFTER:-$(( $(date +%s) - started ))}"
+        [[ -n $AFTER_DONE ]] && info "обучение n=$n: процесс $AFTER_DONE"
         gpu="$(peak "$samples" 2)"; ram="$(peak "$samples" 3)"; swap="$(peak "$samples" 4)"
         iters="$(grep -c 'Learning iteration' "$log")"
         printf '| %s | %s | %s | %s | %s (%s) | %s (%s) | %s (%s) | %s |\n' "$n" "$iters" "$elapsed" \
