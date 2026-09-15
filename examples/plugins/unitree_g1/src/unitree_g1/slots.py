@@ -105,6 +105,15 @@ def slots_of(joint_order: Sequence[str]) -> tuple[int, ...]:
     return tuple(LAYOUT.index(name) for name in joint_order)
 
 
+def machine_for(joint_order: Iterable[str]) -> int | None:
+    """The ``mode_machine`` of the body with exactly these joints, if the package knows one."""
+    wanted = frozenset(joint_order)
+    for value, body in MACHINES.items():
+        if body == wanted:
+            return value
+    return None
+
+
 def empty_slots(joint_order: Iterable[str]) -> frozenset[int]:
     """Slots no joint of the contract occupies."""
     used = set(slots_of(tuple(joint_order)))

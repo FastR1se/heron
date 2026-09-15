@@ -19,9 +19,12 @@ from unitree_g1.slots import (
     slots_of,
 )
 
+from heron.core.mjcf import parse_mjcf
+
 EXAMPLES = Path(__file__).resolve().parents[3]
 ROBOT = EXAMPLES / "robots" / "g1_23dof"
 DESCRIPTIONS = ROBOT / "vendor" / "unitree_ros" / "robots" / "g1_description"
+TWIN_MJCF = ROBOT / "vendor" / "unitree_mujoco" / "unitree_robots" / "g1" / "g1_23dof.xml"
 PROFILE = ROBOT / "profile.yaml"
 NOT_FETCHED = "описание G1 не загружено: python examples/robots/g1_23dof/fetch_description.py"
 
@@ -36,14 +39,27 @@ def actuated_joints(mjcf: Path) -> list[str]:
 def test_the_layout_is_the_actuator_order_of_the_29_dof_mjcf() -> None:
     """The twin's bridge puts motor_cmd[i] into ctrl[i]: actuator order is slot order.
 
-    The file in unitree_ros is the one the platform fetches (fetch_description.py);
-    unitree_mujoco declares the same order name for name (checked by hand,
-    journal 2026-09-14).
+    unitree_ros declares the same order name for name as the twin's own file, which
+    the test below reads.
     """
     mjcf = DESCRIPTIONS / "g1_29dof.xml"
     if not mjcf.is_file():
         pytest.skip(NOT_FETCHED)
     assert tuple(actuated_joints(mjcf)) == LAYOUT
+
+
+def test_the_mjcf_the_twin_loads_declares_its_actuators_in_slot_order() -> None:
+    """The file the vendor's twin loads for the 23-DoF body, fetched from its repository.
+
+    29 actuators, not 23: the six joints this body lacks hang on bodies of their
+    own, twenty metres above the floor, and keep their slots. Checked by hand in
+    session 12; read by a test since the file is fetched (journal 2026-09-15).
+    """
+    if not TWIN_MJCF.is_file():
+        pytest.skip(NOT_FETCHED)
+    model = parse_mjcf(TWIN_MJCF)
+    assert tuple(item.joint for item in model.actuators) == LAYOUT
+    assert len(model.joints) == len(LAYOUT) + 1, "и свободная база"
 
 
 def test_the_23_dof_mjcf_of_unitree_ros_is_not_a_slot_order() -> None:

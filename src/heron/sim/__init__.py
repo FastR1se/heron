@@ -8,16 +8,25 @@ Nothing here imports a simulator: the core installs without vendor dependencies
 
 from .base import SimBackendFactory, SimulationError
 from .gazebo import GazeboBackend, GazeboRobot, GazeboWorld
-from .process import Launcher, PlanningLauncher, Process, SubprocessLauncher
+from .mujoco import MujocoBackend, MujocoRobot, MujocoWorld
+from .mujoco_twin import MujocoScene, MujocoTwin, TwinProcess
+from .process import Launcher, PlanningLauncher, Process, SubprocessLauncher, stop_all
 
 __all__ = [
     "GazeboBackend",
     "GazeboRobot",
     "GazeboWorld",
     "Launcher",
+    "MujocoBackend",
+    "MujocoRobot",
+    "MujocoScene",
+    "MujocoTwin",
+    "MujocoWorld",
     "PlanningLauncher",
     "Process",
     "SimBackendFactory",
     "SimulationError",
     "SubprocessLauncher",
+    "TwinProcess",
+    "stop_all",
 ]

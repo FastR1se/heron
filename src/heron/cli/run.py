@@ -18,6 +18,7 @@ a run.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from ..core.enums import Role, Status
@@ -204,6 +205,7 @@ def execute(
     library: SkillLibrary | None = None,
     dry_run: bool = False,
     machine: Machine | None = None,
+    scenario_path: Path | None = None,
 ) -> tuple[list[str], RunResult | None]:
     """Set the run up, then run it. Returns the plan it printed and the result.
 
@@ -213,7 +215,7 @@ def execute(
     scene, and nothing stops a hand-started world or an edited profile from
     putting one there anyway (invariant 6).
     """
-    report = check_scenario(scenario, registry)
+    report = check_scenario(scenario, registry, path=scenario_path)
     if not report.ok:
         raise RunError(
             f"сцена {scenario.name!r} не проходит проверку, запуск отменён "

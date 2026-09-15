@@ -22,6 +22,7 @@ PUBLIC_MODULES: Final = frozenset(
         "core.contract",
         "core.enums",
         "core.environment",
+        "core.mjcf",
         "core.models",
         "core.types",
         "core.units",
@@ -34,5 +35,7 @@ PUBLIC_MODULES: Final = frozenset(
         # What a simulation backend and a twin's processes are started with.
         "sim.base",
         "sim.process",
+        # What a twin that is a MuJoCo world of its own contributes (ADR-0030).
+        "sim.mujoco_twin",
     }
 )

@@ -136,3 +136,14 @@ jobs:
           uv run heron validate examples/scenarios/humanoid.yaml --registry examples/robots
           uv run heron sim run examples/scenarios/humanoid.yaml --into generated/humanoid --registry examples/robots --dry-run
           uv run heron run examples/scenarios/humanoid.yaml --registry examples/robots --dry-run
+
+      # Фаза 4, этап 4: мир MuJoCo — двойник производителя (ADR-0030). Без пакета робота
+      # сцена проверяется (MJCF, сцена, шаг), а мир не строится — двойника некому поставить.
+      - name: Сцена с двойником MuJoCo проверяется
+        run: |
+          uv run heron validate examples/scenarios/humanoid_mujoco.yaml --registry examples/robots
+          uv run heron run examples/scenarios/humanoid_mujoco.yaml --registry examples/robots --dry-run
+          if uv run heron sim run examples/scenarios/humanoid_mujoco.yaml --into generated/mujoco --registry examples/robots --dry-run > sim-mujoco.txt 2>&1; then
+            echo "мир MuJoCo построен без пакета робота"; cat sim-mujoco.txt; exit 1
+          fi
+          grep -F "адаптер не установлен" sim-mujoco.txt

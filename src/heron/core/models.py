@@ -54,6 +54,10 @@ class ModelDescription(BaseModel):
 
     urdf: str
     mesh_dir: str | None = None
+    mjcf: str | None = None
+    """The same robot in MJCF, for a MuJoCo world (ADR-0031). An input like the
+    URDF, compared with the profile by the ``mjcf.*`` rules; relative to the
+    profile. A MuJoCo scene has to load this file."""
 
 
 class JointRange(BaseModel):

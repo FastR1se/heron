@@ -30,6 +30,7 @@ from ..core.twins import TwinError, find_twin, why_missing
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
 from .description import check_description
+from .mjcf import check_mjcf, check_mujoco_world
 from .report import Report, error, warning
 
 # --------------------------------------------------------------------------
@@ -61,6 +62,7 @@ def check_profile(
     _check_adapters(profile, report)
     if path is not None:
         report.extend(check_description(profile, path).findings)
+        report.extend(check_mjcf(profile, path).findings)
 
     if lock is not None:
         previous = lock.undeclared_change(profile.name, contract)
@@ -324,14 +326,22 @@ def check_contracts(left: Contract, right: Contract, *, where: str) -> Report:
 # --------------------------------------------------------------------------
 
 
-def check_scenario(scenario: Scenario, registry: Registry) -> Report:
-    """Everything decidable about a scenario before the world is built."""
+def check_scenario(
+    scenario: Scenario, registry: Registry, *, path: Path | None = None
+) -> Report:
+    """Everything decidable about a scenario before the world is built.
+
+    ``path`` is where the scenario was read from. With it the files the scenario
+    names relative to itself become reachable -- a MuJoCo scene -- as a profile's
+    description does for ``check_profile``.
+    """
     report = Report()
     where = f"scenario:{scenario.name}"
     required_target = sim_target(scenario.world.backend)
     # Two robots may share a profile; its own findings are reported once.
     checked: set[str] = set()
     participants: list[tuple[ScenarioRobot, RobotProfile]] = []
+    located: list[tuple[ScenarioRobot, RobotProfile, Path]] = []
 
     for robot in scenario.robots:
         spot = f"{where}.robots.{robot.id}"
@@ -352,6 +362,7 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
             continue
 
         participants.append((robot, profile))
+        located.append((robot, profile, source.path))
         if required_target not in profile.adapters:
             report.add(
                 error(
@@ -373,6 +384,7 @@ def check_scenario(scenario: Scenario, registry: Registry) -> Report:
             report.extend(check_profile(profile, path=source.path).findings)
 
     _check_twins(scenario, participants, report)
+    report.extend(check_mujoco_world(scenario, located, path).findings)
 
     learners = scenario.learners
     if len(learners) > 1:

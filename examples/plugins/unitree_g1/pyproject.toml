@@ -20,6 +20,11 @@ dependencies = ["heron>=0.3"]
 [project.entry-points."heron.adapters"]
 unitree_g1_dds = "unitree_g1.adapter:G1DdsAdapter"
 
+# The other side of the link in each simulator this package ships a twin for
+# (ADR-0021). Found by the pair it declares, not by this name (ADR-0024).
+[project.entry-points."heron.twins"]
+unitree_g1_mujoco = "unitree_g1.twin:G1MujocoTwin"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

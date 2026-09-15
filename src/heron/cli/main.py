@@ -129,7 +129,7 @@ def validate(
         try:
             if _looks_like_scenario(path):
                 scenario = load_scenario(path)
-                report = report.merged(check_scenario(scenario, registry))
+                report = report.merged(check_scenario(scenario, registry, path=path))
             else:
                 profile = load_model(path, RobotProfile)
                 lock = ContractLock.load(path.parent)
@@ -324,7 +324,7 @@ def env_check(
         typer.echo(f"проверено  {side.where}: требований {side.requirements}")
     if environment.checked:
         typer.echo("")
-    _finish(check_scenario(scenario, registry).merged(environment.report))
+    _finish(check_scenario(scenario, registry, path=scenario_file).merged(environment.report))
 
 
 # -- run -------------------------------------------------------------------
@@ -376,6 +376,7 @@ def run(
             target=target,
             goal=_goal(goal),
             dry_run=dry_run,
+            scenario_path=scenario_file,
         )
     except (RunError, IncompatibleSkillError, ProfileNotFoundError, LoadError) as exc:
         typer.echo(str(exc), err=True)

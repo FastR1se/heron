@@ -102,6 +102,25 @@ class SubprocessLauncher:
         return [item.command for item in self.processes]
 
 
+def stop_all(processes: list[Process], timeout: float) -> None:
+    """Stop processes newest first, and wait for each to actually be gone.
+
+    The list is emptied. A process that outlives ``timeout`` after being asked
+    to terminate is killed: a simulator killed while holding the graphics context
+    leaves the next run without one, so the wait is generous, but it ends.
+    """
+    while processes:
+        process = processes.pop()
+        if process.poll() is not None:
+            continue
+        process.terminate()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 @dataclass(slots=True)
 class PlannedProcess:
     """A process that was planned and never started."""

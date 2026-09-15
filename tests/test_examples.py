@@ -197,6 +197,53 @@ def test_the_vendor_robot_agrees_with_its_description(robots: Path) -> None:
     ]
 
 
+def test_the_vendor_robot_agrees_with_its_mjcf_and_names_where_the_two_disagree(
+    robots: Path,
+) -> None:
+    """ADR-0031 on the vendor's two files: the profile fits both, and the one thing
+    the files disagree on is the ankle torque found in stage 0 -- 35 N·m and 50."""
+    path = _vendor_profile(robots)
+    report = check_profile(load_model(path, RobotProfile), path=path)
+
+    assert report.ok, [f.code for f in report.errors]
+    findings = [item for item in report if item.code.startswith("mjcf.")]
+    assert [item.code for item in findings] == ["mjcf.differs_from_urdf"]
+    assert findings[0].detail["quantity"] == "effort"
+    assert findings[0].detail["joints"] == {
+        f"{side}_ankle_{axis}_joint": {"urdf": 35.0, "mjcf": 50.0}
+        for side in ("left", "right")
+        for axis in ("pitch", "roll")
+    }
+
+
+def test_the_vendor_twin_scenario_validates_and_starts_the_vendors_program(
+    examples_dir: Path, robots: Path, tmp_path: Path
+) -> None:
+    """Stage 4 minus the simulator: the scene, the twin from the robot's package, the
+    link from the profile. The package is installed wherever examples are (CI)."""
+    from heron.sim.mujoco import MujocoBackend
+    from heron.sim.process import PlanningLauncher
+
+    _vendor_profile(robots)
+    path = examples_dir / "scenarios" / "humanoid_mujoco.yaml"
+    scenario = load_scenario(path)
+    assert check_scenario(scenario, Registry([robots]), path=path).ok
+
+    planner = PlanningLauncher()
+    backend = MujocoBackend(
+        Registry([robots]), into=tmp_path, launcher=planner, scenario_path=path
+    )
+    world = backend.build_world(scenario)
+    backend.start()
+
+    assert world.scene.world.name == "scene_23dof.xml"
+    assert planner.commands == [
+        ("unitree_mujoco", "-r", "g1", "-s", str(world.scene.world), "-i", "1", "-n", "lo")
+    ]
+    gazebo = load_scenario(examples_dir / "scenarios" / "humanoid.yaml")
+    assert scenario.task == gazebo.task, "сверка двойников (этап 6) — одна цель в обоих мирах"
+
+
 def test_the_vendor_robot_generates_with_every_mesh_anchored(
     robots: Path, tmp_path: Path
 ) -> None:

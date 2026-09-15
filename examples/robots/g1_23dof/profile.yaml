@@ -22,6 +22,12 @@ name: g1_23dof
 
 description:
   urdf: vendor/unitree_ros/robots/g1_description/g1_23dof.urdf
+  # Тот же робот на языке MuJoCo — файл, который загружает двойник производителя, из его
+  # репозитория и коммита (ADR-0023, ADR-0031). Не g1_23dof.xml из unitree_ros: там 23
+  # привода подряд, а у двойника 29 со слотами под пустые суставы (журнал 2026-09-14).
+  # Описания расходятся в пределе момента голеностопа — 35 Н·м в URDF и 50 в MJCF;
+  # валидатор это называет (mjcf.differs_from_urdf), а не выбирает.
+  mjcf: vendor/unitree_mujoco/unitree_robots/g1/g1_23dof.xml
 
 contract:
   # revision 2: действие получило kp и kd (ADR-0019).
@@ -110,5 +116,11 @@ adapters:
     plugin: dummy
   sim.gazebo:
     plugin: ros2_control
+  # DDS производителя против его двойника в MuJoCo. Связь — единственное, что отличает двойник
+  # от железа (ADR-0020, ADR-0029): домен двойника по умолчанию 1, у робота 0; на lo без
+  # мультикаста обнаружение одноадресное, пир объявляет только эта сторона (ADR-0023, п. 3).
+  sim.mujoco:
+    plugin: unitree_g1_dds
+    params: {domain: 1, interface: lo, peers: [127.0.0.1]}
 
 skills: [hold, move_joints]

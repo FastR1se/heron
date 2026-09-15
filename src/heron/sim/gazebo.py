@@ -17,7 +17,6 @@ Nothing here imports a simulator. The core installs without vendor dependencies
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -32,7 +31,7 @@ from ..generators.twin import GAZEBO
 from ..registry.registry import Registry
 from ..validator.rules import check_scenario
 from .base import SimulationError
-from .process import Launcher, Process, SubprocessLauncher
+from .process import Launcher, Process, SubprocessLauncher, stop_all
 
 BACKEND: Final = GAZEBO
 """Name this backend answers to in ``world.backend`` and adapter keys."""
@@ -108,7 +107,7 @@ class GazeboBackend:
                 f"сцена объявляет владельцем физики {scenario.world.backend!r}, "
                 f"а это бэкенд {BACKEND!r}; в сцене владелец один (ADR-0002)"
             )
-        report = check_scenario(scenario, self.registry)
+        report = check_scenario(scenario, self.registry, path=self.scenario_path)
         if not report.ok:
             raise SimulationError(
                 f"сцена {scenario.name!r} не проходит проверку, мир не строится "
@@ -184,16 +183,7 @@ class GazeboBackend:
 
     def stop(self) -> None:
         """Stop everything, newest first, and wait for it to actually be gone."""
-        while self.processes:
-            process = self.processes.pop()
-            if process.poll() is not None:
-                continue
-            process.terminate()
-            try:
-                process.wait(timeout=STOP_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+        stop_all(self.processes, STOP_TIMEOUT)
 
     # -- specifics ----------------------------------------------------------
 

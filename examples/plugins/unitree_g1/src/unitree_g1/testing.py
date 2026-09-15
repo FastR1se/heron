@@ -17,7 +17,7 @@ from heron.core.models import AdapterSpec, JointRange, Limits, RobotProfile
 
 from .adapter import G1DdsAdapter
 from .channel import RecordingChannel
-from .slots import BODY_23DOF, LAYOUT, MACHINES
+from .slots import BODY_23DOF, LAYOUT, machine_for
 
 PLUGIN: Final = "unitree_g1_dds"
 """The adapter's entry-point name, as a profile writes it."""
@@ -66,11 +66,10 @@ def profile_23dof(**overrides: Any) -> RobotProfile:
 
 def machine_of(joints: Sequence[str]) -> int:
     """The ``mode_machine`` of the body with exactly these joints."""
-    wanted = frozenset(joints)
-    for value, body in MACHINES.items():
-        if body == wanted:
-            return value
-    raise ValueError("ни одно известное тело не состоит ровно из этих суставов")
+    machine = machine_for(joints)
+    if machine is None:
+        raise ValueError("ни одно известное тело не состоит ровно из этих суставов")
+    return machine
 
 
 def deliver_states(

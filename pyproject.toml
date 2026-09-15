@@ -40,6 +40,8 @@ ros2_control = "heron.adapters.ros2_control:Ros2ControlAdapter"
 
 [project.entry-points."heron.sim_backends"]
 gazebo = "heron.sim.gazebo:GazeboBackend"
+# Shared by every robot with a MuJoCo twin, and knowing none of them (ADR-0030).
+mujoco = "heron.sim.mujoco:MujocoBackend"
 
 # The other side of a link in simulation (ADR-0021). The ros2_control path in
 # Gazebo is a twin like any vendor's, registered the same way.
