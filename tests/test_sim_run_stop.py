@@ -8,6 +8,7 @@ ended the command and left the vendor's simulator running.
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -200,6 +201,76 @@ def test_a_real_process_is_interrupted_with_sigint() -> None:
     time.sleep(1.0)
     stop_all(list(launcher.processes), 10.0, request=StopRequest.INTERRUPT)
     assert process.poll() == 7
+
+
+# -- a world is a process group (ADR-0037) ------------------------------------------
+
+
+def _alive(pid: int) -> bool:
+    """Whether a process exists, giving init a moment to reap an orphan."""
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.05)
+
+
+def _behind_a_shell(tmp_path: Path, body: str) -> tuple[list[str], Path]:
+    """A command that starts Python through ``/bin/sh -c``, as ``gz_sim.launch.py``
+    starts ``gz sim``; the trailing command keeps the shell from exec-ing it."""
+    marker = tmp_path / "grandchild.pid"
+    code = f"import os, signal, time\nopen({str(marker)!r}, 'w').write(str(os.getpid()))\n{body}"
+    return ["/bin/sh", "-c", f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}; true"], marker
+
+
+def _started(marker: Path) -> int:
+    deadline = time.monotonic() + 10.0
+    while not (marker.is_file() and marker.read_text()):
+        assert time.monotonic() < deadline, "внук не запустился за 10 с"
+        time.sleep(0.05)
+    return int(marker.read_text())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="группы процессов — только на POSIX")
+def test_a_process_behind_a_shell_is_interrupted_with_its_group(tmp_path: Path) -> None:
+    """Stage 5, third run: the shell in front of ``gz sim`` passed no SIGINT on, and
+    ``gz sim`` outlived the world."""
+    from heron.sim.process import SubprocessLauncher
+
+    command, marker = _behind_a_shell(tmp_path, "time.sleep(30)")
+    launcher = SubprocessLauncher()
+    launcher.start(command)
+    grandchild = _started(marker)
+
+    started = time.monotonic()
+    stop_all(list(launcher.processes), 10.0, request=StopRequest.INTERRUPT)
+
+    assert time.monotonic() - started < 10.0
+    assert not _alive(grandchild)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="группы процессов — только на POSIX")
+def test_what_ignores_the_interrupt_is_killed_with_its_group_at_the_deadline(
+    tmp_path: Path,
+) -> None:
+    from heron.sim.process import SubprocessLauncher
+
+    command, marker = _behind_a_shell(
+        tmp_path, "signal.signal(signal.SIGINT, signal.SIG_IGN)\ntime.sleep(60)"
+    )
+    launcher = SubprocessLauncher()
+    launcher.start(command)
+    grandchild = _started(marker)
+
+    started = time.monotonic()
+    stop_all(list(launcher.processes), 2.0, request=StopRequest.INTERRUPT)
+
+    assert time.monotonic() - started < 10.0
+    assert not _alive(grandchild)
 
 
 # -- the interrupt reaches its process (ADR-0036) ---------------------------------

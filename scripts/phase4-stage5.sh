@@ -137,10 +137,18 @@ entry_names() {  # entry_names <python> <group suffix>
         echo "не читается"
 }
 
-# Processes of a group and the ROS 2 middleware each has loaded, read off its maps.
-rmw_in_group() {  # rmw_in_group <pgid>
+# A process and everything under it. The world lives in a session of its own, not in the
+# group of sim run (ADR-0037), so it is found by descent.
+descendants() {  # descendants <pid>
+    local p
+    echo "$1"
+    for p in $(pgrep -P "$1"); do descendants "$p"; done
+}
+
+# Processes under sim run and the ROS 2 middleware each has loaded, read off its maps.
+rmw_in_tree() {  # rmw_in_tree <pid>
     local p libs
-    for p in $(pgrep -g "$1"); do
+    for p in $(descendants "$1"); do
         libs="$(grep -oE 'librmw_[a-z_]+\.so' "/proc/$p/maps" 2>/dev/null |
             grep -vE '^librmw_(implementation|dds_common)' | sort -u | tr '\n' ' ')"
         [[ -n $libs ]] && printf '%s[%s] %s\n' "$(cat "/proc/$p/comm" 2>/dev/null)" "$p" "$libs"
@@ -423,7 +431,7 @@ step_scene() {
         record "scene контроллеры" отказ "$(tr '\n' ' ' < "$dir/controllers.txt" | cut -c1-200)"
     fi
 
-    rmw_in_group "$pgid" > "$dir/rmw.txt"
+    rmw_in_tree "$pgid" > "$dir/rmw.txt"
     sed 's/^/      /' "$dir/rmw.txt"
     local total good
     total=$(wc -l < "$dir/rmw.txt"); good=$(grep -c librmw_cyclonedds_cpp "$dir/rmw.txt")
@@ -459,10 +467,10 @@ step_scene() {
     # job of this script starts with SIGINT ignored, and ros2 launch listens only through
     # Python's handlers (ADR-0036).
     local p mask
-    for p in $(pgrep -g "$pgid"); do
+    for p in $(descendants "$pgid"); do
         mask="$(sed -n 's/^SigIgn:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null)"
         [[ -n $mask ]] || continue
-        info "$(cat "/proc/$p/comm" 2>/dev/null)[$p] SigIgn $mask — SIGINT $( (( 0x$mask & 2 )) && echo игнорируется || echo доходит)"
+        info "$(cat "/proc/$p/comm" 2>/dev/null)[$p] группа $(ps -o pgid= -p "$p" | tr -d ' ') SigIgn $mask — SIGINT $( (( 0x$mask & 2 )) && echo игнорируется || echo доходит)"
     done
 
     # SIGTERM to sim run alone, not to the group: the platform's stop is under test

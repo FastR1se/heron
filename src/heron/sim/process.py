@@ -16,11 +16,13 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 
 class StopRequest(StrEnum):
@@ -69,9 +71,21 @@ class Launcher(Protocol):
     ) -> Process: ...
 
 
+GROUP_POLL_S: Final = 0.1
+"""How often a stopping world is looked at for processes still in it."""
+
+
 @dataclass(slots=True)
 class SubprocessProcess:
-    """A real process."""
+    """A real process, and on POSIX the process group it leads (ADR-0037).
+
+    A world is rarely one process: ``ros2 launch`` starts nodes, and a vendor's
+    launch file starts ``gz sim`` behind ``/bin/sh -c``, which passes no signal on.
+    So the group is what is interrupted, waited for and killed -- as a terminal's
+    Ctrl+C reaches every process of the foreground group, whatever stands between
+    them. ``terminate`` stays addressed to the one process: it asks a program that
+    stops itself.
+    """
 
     command: tuple[str, ...]
     handle: subprocess.Popen[bytes]
@@ -80,20 +94,52 @@ class SubprocessProcess:
         return self.handle.poll()
 
     def interrupt(self) -> None:
-        if os.name == "nt":  # pragma: no cover - worlds are started on Linux
+        if sys.platform == "win32":  # pragma: no cover - worlds are started on Linux
             # Windows delivers Ctrl+C to a console group, never to one process.
             self.handle.terminate()
-            return
-        self.handle.send_signal(signal.SIGINT)
+        else:
+            self._signal_group(signal.SIGINT)
 
     def terminate(self) -> None:
         self.handle.terminate()
 
     def kill(self) -> None:
-        self.handle.kill()
+        if sys.platform == "win32":  # pragma: no cover - worlds are started on Linux
+            self.handle.kill()
+        else:
+            self._signal_group(signal.SIGKILL)
 
     def wait(self, timeout: float | None = None) -> int:
-        return self.handle.wait(timeout=timeout)
+        """Exit code of the process, once nothing of its group is left.
+
+        A leader that exits before its children has not stopped a world, and a
+        child still closing a graphics context is given the rest of the deadline.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        code = self.handle.wait(timeout=timeout)
+        if sys.platform != "win32":
+            while self._group_alive():
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(list(self.command), timeout or 0.0)
+                time.sleep(GROUP_POLL_S)
+        return code
+
+    if sys.platform != "win32":
+
+        def _signal_group(self, signum: signal.Signals) -> None:
+            try:
+                os.killpg(self.handle.pid, signum)
+            except ProcessLookupError:
+                return
+
+        def _group_alive(self) -> bool:
+            try:
+                os.killpg(self.handle.pid, 0)
+            except ProcessLookupError:
+                return False
+            except PermissionError:  # pragma: no cover - a member changed its user
+                return True
+            return True
 
 
 def _default_sigint() -> None:  # pragma: no cover - runs in the child, before exec
@@ -129,7 +175,9 @@ class SubprocessLauncher:
             list(command),
             cwd=str(cwd) if cwd is not None else None,
             env=dict(env) if env is not None else None,
-            preexec_fn=None if os.name == "nt" else _default_sigint,
+            preexec_fn=None if sys.platform == "win32" else _default_sigint,
+            # Its own session, so its own group: what it starts is stopped with it (ADR-0037).
+            start_new_session=sys.platform != "win32",
         )
         process = SubprocessProcess(command=tuple(command), handle=handle)
         self.processes.append(process)

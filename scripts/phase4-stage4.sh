@@ -135,7 +135,15 @@ wait_for_line() {  # wait_for_line <file> <text> <seconds> <pid>
 
 running() { local state; state="$(ps -o stat= -p "$1" 2>/dev/null)" && [[ $state != Z* ]]; }
 twin_pids() { pgrep -x unitree_mujoco; }
-group_of() { local g; g="$(pgrep -g "$1" -x unitree_mujoco | head -1)"; echo "${g:-}"; }
+# The twin lives in a session of its own, not in the group of sim run (ADR-0037): found by descent.
+descendants() { local p; echo "$1"; for p in $(pgrep -P "$1"); do descendants "$p"; done; }
+group_of() {
+    local p
+    for p in $(descendants "$1"); do
+        [[ "$(cat "/proc/$p/comm" 2>/dev/null)" == unitree_mujoco ]] && { echo "$p"; return; }
+    done
+    echo ""
+}
 
 entry_names() {  # entry_names <python> <group suffix>
     "$1" -c "from importlib.metadata import entry_points; print(' '.join(sorted(e.name for e in entry_points(group='$APP.$2'))) or 'пусто')" 2>/dev/null ||
