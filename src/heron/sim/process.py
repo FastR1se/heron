@@ -13,11 +13,26 @@ a simulator both need.
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+
+class StopRequest(StrEnum):
+    """How a process is asked to stop before it is killed (ADR-0035)."""
+
+    TERMINATE = "terminate"
+    """SIGTERM: what a program of its own is asked to stop with."""
+
+    INTERRUPT = "interrupt"
+    """SIGINT, as Ctrl+C at a terminal. The one signal ``ros2 launch`` stops its
+    children on: on SIGTERM it cancels itself and leaves them running, and its own
+    log says so."""
 
 
 @runtime_checkable
@@ -29,6 +44,9 @@ class Process(Protocol):
 
     def poll(self) -> int | None:
         """Exit code, or ``None`` while it is still running."""
+
+    def interrupt(self) -> None:
+        """Ask it to stop the way Ctrl+C at a terminal would."""
 
     def terminate(self) -> None: ...
 
@@ -60,6 +78,13 @@ class SubprocessProcess:
 
     def poll(self) -> int | None:
         return self.handle.poll()
+
+    def interrupt(self) -> None:
+        if os.name == "nt":  # pragma: no cover - worlds are started on Linux
+            # Windows delivers Ctrl+C to a console group, never to one process.
+            self.handle.terminate()
+            return
+        self.handle.send_signal(signal.SIGINT)
 
     def terminate(self) -> None:
         self.handle.terminate()
@@ -102,18 +127,29 @@ class SubprocessLauncher:
         return [item.command for item in self.processes]
 
 
-def stop_all(processes: list[Process], timeout: float) -> None:
+def stop_all(
+    processes: list[Process],
+    timeout: float,
+    *,
+    request: StopRequest = StopRequest.TERMINATE,
+) -> None:
     """Stop processes newest first, and wait for each to actually be gone.
 
-    The list is emptied. A process that outlives ``timeout`` after being asked
-    to terminate is killed: a simulator killed while holding the graphics context
-    leaves the next run without one, so the wait is generous, but it ends.
+    The list is emptied. Each process is asked once, the way ``request`` says --
+    the backend knows what it started. A process that outlives ``timeout`` is
+    killed, not asked again another way: a second request can undo the first, and
+    SIGTERM to a launch stopping on SIGINT orphans what it has not stopped yet
+    (ADR-0035). A simulator killed while holding the graphics context leaves the
+    next run without one, so the wait is generous, but it ends.
     """
     while processes:
         process = processes.pop()
         if process.poll() is not None:
             continue
-        process.terminate()
+        if request is StopRequest.INTERRUPT:
+            process.interrupt()
+        else:
+            process.terminate()
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -130,6 +166,9 @@ class PlannedProcess:
 
     def poll(self) -> int | None:
         return 0
+
+    def interrupt(self) -> None:
+        return None
 
     def terminate(self) -> None:
         return None

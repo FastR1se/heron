@@ -31,7 +31,7 @@ from ..generators.twin import GAZEBO
 from ..registry.registry import Registry
 from ..validator.rules import check_scenario
 from .base import SimulationError
-from .process import Launcher, Process, SubprocessLauncher, stop_all
+from .process import Launcher, Process, StopRequest, SubprocessLauncher, stop_all
 
 BACKEND: Final = GAZEBO
 """Name this backend answers to in ``world.backend`` and adapter keys."""
@@ -182,8 +182,14 @@ class GazeboBackend:
         self._run(self.launch_command(world))
 
     def stop(self) -> None:
-        """Stop everything, newest first, and wait for it to actually be gone."""
-        stop_all(self.processes, STOP_TIMEOUT)
+        """Stop everything, newest first, and wait for it to actually be gone.
+
+        The world is one ``ros2 launch``, and it is interrupted, not terminated: on
+        SIGINT it stops what it started, in order, escalating on its own; on SIGTERM
+        it cancels itself and leaves the simulator and every node running. The
+        stage 5 run on Linux found exactly that (ADR-0035).
+        """
+        stop_all(self.processes, STOP_TIMEOUT, request=StopRequest.INTERRUPT)
 
     # -- specifics ----------------------------------------------------------
 

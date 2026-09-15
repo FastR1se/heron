@@ -7,16 +7,21 @@ ended the command and left the vendor's simulator running.
 
 from __future__ import annotations
 
+import os
 import signal
+import subprocess
+import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
 
+import pytest
 from typer.testing import CliRunner
 
 from heron.cli import main as cli
 from heron.core.models import RobotProfile, Scenario
-from heron.sim.process import stop_all
+from heron.sim.process import StopRequest, stop_all
 
 runner = CliRunner()
 
@@ -31,6 +36,9 @@ class TerminatedWhileRunning:
 
     def poll(self) -> int | None:
         return 0 if self.terminated else None
+
+    def interrupt(self) -> None:
+        self.terminated = True
 
     def terminate(self) -> None:
         self.terminated = True
@@ -103,3 +111,82 @@ def test_sigterm_stops_the_world_it_started(tmp_path: Path, monkeypatch: Any) ->
     assert "останавливаю" in result.output
     assert [process.terminated for process in Launcher.started] == [True]
     assert signal.getsignal(signal.SIGTERM) == before
+
+
+# -- how each world is asked to stop (ADR-0035) ------------------------------------
+
+
+class Recorder:
+    """A process that writes down what it was asked, and can outlive its wait."""
+
+    command = ("ros2", "launch", "bringup.launch.xml")
+
+    def __init__(self, *, outlives: bool = False) -> None:
+        self.calls: list[str] = []
+        self.outlives = outlives
+
+    def poll(self) -> int | None:
+        return None
+
+    def interrupt(self) -> None:
+        self.calls.append("interrupt")
+
+    def terminate(self) -> None:
+        self.calls.append("terminate")
+
+    def kill(self) -> None:
+        self.calls.append("kill")
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.calls.append("wait")
+        if self.outlives and "kill" not in self.calls:
+            raise subprocess.TimeoutExpired(list(self.command), timeout or 0.0)
+        return 0
+
+
+def test_a_gazebo_world_is_interrupted_as_at_a_terminal(tmp_path: Path) -> None:
+    """Stage 5 on Linux: SIGTERM to ``ros2 launch`` left Gazebo and every node running."""
+    from heron.sim.gazebo import GazeboBackend
+
+    backend = GazeboBackend(into=tmp_path)
+    launch = Recorder()
+    backend.processes = [launch]
+    backend.stop()
+
+    assert launch.calls == ["interrupt", "wait"]
+    assert backend.processes == []
+
+
+def test_a_launch_that_outlives_the_interrupt_is_killed_not_terminated(tmp_path: Path) -> None:
+    """A second, different request would cut the launch's own shutdown short."""
+    from heron.sim.gazebo import GazeboBackend
+
+    backend = GazeboBackend(into=tmp_path)
+    launch = Recorder(outlives=True)
+    backend.processes = [launch]
+    backend.stop()
+
+    assert launch.calls == ["interrupt", "wait", "kill", "wait"]
+
+
+def test_a_vendors_program_is_still_terminated() -> None:
+    program = Recorder()
+    stop_all([program], 1.0)
+    assert program.calls == ["terminate", "wait"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SIGINT одному процессу есть только на POSIX")
+def test_a_real_process_is_interrupted_with_sigint() -> None:
+    from heron.sim.process import SubprocessLauncher
+
+    code = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGINT, lambda *_: sys.exit(7))\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    launcher = SubprocessLauncher()
+    process = launcher.start([sys.executable, "-c", code])
+    time.sleep(1.0)
+    stop_all(list(launcher.processes), 10.0, request=StopRequest.INTERRUPT)
+    assert process.poll() == 7
