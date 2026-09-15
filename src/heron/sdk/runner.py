@@ -13,6 +13,7 @@ without touching a robot.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,9 @@ class AdapterContext:
     current_time: float = 0.0
     """Clock of the world, advanced by the executor from the state it read."""
 
+    on_sent: Callable[[Command], None] | None = None
+    """Told of every command the adapter accepted, after it did (ADR-0038)."""
+
     @property
     def profile(self) -> RobotProfile:
         return self.profile_
@@ -57,6 +61,8 @@ class AdapterContext:
     def send(self, cmd: Command) -> None:
         self.adapter.send_command(cmd)
         self.sent.append(cmd)
+        if self.on_sent is not None:
+            self.on_sent(cmd)
 
     def now(self) -> float:
         return self.current_time

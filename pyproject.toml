@@ -20,7 +20,10 @@ dependencies = [
 [project.optional-dependencies]
 sim = ["mujoco>=3.1"]
 onnx = ["onnxruntime>=1.18"]
+# A run on disk (ADR-0038). Not vendor code, and still optional: the core runs without it.
+record = ["mcap>=1.1"]
 dev = [
+    "mcap>=1.1",
     "pytest>=8.0",
     "ruff>=0.5",
     "mypy>=1.10",
@@ -77,6 +80,13 @@ warn_unreachable = true
 
 [[tool.mypy.overrides]]
 module = ["yaml"]
+ignore_missing_imports = true
+
+# Imported only when a record is opened (ADR-0038). Its installed sources are seen by mypy
+# under two module names and stop the check, so it is not followed.
+[[tool.mypy.overrides]]
+module = ["mcap", "mcap.*"]
+follow_imports = "skip"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

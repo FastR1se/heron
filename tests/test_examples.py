@@ -288,6 +288,74 @@ def test_the_vendor_robot_joins_gazebo_through_its_bridge(
     assert '<Peer address="127.0.0.1"' in (environment["CYCLONEDDS_URI"] or "")
 
 
+ARM_GOAL = {"target": [0.0, -0.6, 1.2, 0.0, 0.9, 0.0], "duration": 4.0}
+
+
+def test_the_complex_scene_holds_two_links_in_one_world(
+    examples_dir: Path, robots: Path, tmp_path: Path
+) -> None:
+    """Stage 7 minus the simulator: a robot through ros2_control and a robot through its
+    vendor's DDS, one owner of the physics (ADR-0002), one environment for the world
+    (ADR-0034), and the run of either robot joins it (ADR-0039)."""
+    import json
+    from xml.etree import ElementTree as ET
+
+    import yaml
+
+    from heron.cli.run import execute
+    from heron.generators.bundle import world_environment
+    from heron.sim.gazebo import GazeboBackend
+    from heron.sim.process import PlanningLauncher
+
+    _vendor_profile(robots)
+    path = examples_dir / "scenarios" / "complex.yaml"
+    scenario = load_scenario(path)
+    registry = Registry([robots])
+    assert check_scenario(scenario, registry, path=path).ok
+    assert scenario.task is None, "задачи раздаёт координатор (фаза 8), а не сценарий"
+
+    planner = PlanningLauncher()
+    backend = GazeboBackend(registry, into=tmp_path, launcher=planner, scenario_path=path)
+    world = backend.build_world(scenario)
+    backend.start()
+    assert len(planner.commands) == 1, "мир один — один запуск"
+
+    files = {str(item.path): item.content for item in world.bundle.files}
+    control = {
+        item["id"]: item["control"] for item in json.loads(files["manifest.json"])["robots"]
+    }
+    assert control["arm1"]["state_topic"] == "/arm1/joint_states"
+    assert control["g1"]["state_topic"] == "/lowstate"
+
+    assert "/arm1/controller_manager" in yaml.safe_load(files["arm1/controllers.yaml"])
+    assert "/g1/low_level_bridge" in yaml.safe_load(files["g1/controllers.yaml"])
+    for robot in ("arm1", "g1"):
+        description = ET.fromstring(files[f"{robot}/description.urdf"].split("?>", 1)[1])
+        namespaces = [item.text for item in description.iter("namespace")]
+        assert namespaces == [robot], "у каждого робота свой менеджер контроллеров"
+
+    launch = ET.fromstring(files["bringup.launch.xml"].split("?>", 1)[1])
+    variables = [(item.get("name"), item.get("value")) for item in launch.iter("set_env")]
+    environment = world_environment(scenario, registry)
+    assert dict(variables) == environment and len(variables) == len(environment)
+    assert environment["ROS_DOMAIN_ID"] == "1"
+
+    humanoid = load_scenario(examples_dir / "scenarios" / "humanoid.yaml").task
+    assert humanoid is not None
+    for robot, goal in (("arm1", ARM_GOAL), ("g1", humanoid.goal)):
+        lines, _ = execute(
+            scenario, registry, robot_id=robot, skill="move_joints", goal=goal,
+            dry_run=True, environ={}, scenario_path=path,
+        )
+        assert any(line.startswith("окружение") and "ROS_DOMAIN_ID=1" in line for line in lines)
+
+
+def test_the_arm_goal_of_the_complex_scene_is_the_table_scenes(examples_dir: Path) -> None:
+    """Stage 7 drives the arm to the goal phase 3 proved it reaches."""
+    table = load_scenario(examples_dir / "scenarios" / "table.yaml").task
+    assert table is not None and table.goal == ARM_GOAL
+
+
 def test_the_vendor_robot_generates_with_every_mesh_anchored(
     robots: Path, tmp_path: Path
 ) -> None:

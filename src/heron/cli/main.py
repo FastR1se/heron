@@ -386,6 +386,10 @@ def run(
         bool,
         typer.Option("--dry-run", help="Показать план и ничего не запускать."),
     ] = False,
+    record: Annotated[
+        Path | None,
+        typer.Option("--record", help="Записать прогон в файл MCAP (ADR-0038)."),
+    ] = None,
     roots: RootsOption = None,
 ) -> None:
     """Выполнить задачу сценария на роботе (фаза 3).
@@ -410,6 +414,7 @@ def run(
             goal=_goal(goal),
             dry_run=dry_run,
             scenario_path=scenario_file,
+            record=record,
         )
     except (RunError, IncompatibleSkillError, ProfileNotFoundError, LoadError) as exc:
         typer.echo(str(exc), err=True)
@@ -424,6 +429,8 @@ def run(
     typer.echo("")
     for line in describe(result):
         typer.echo(line)
+    if record is not None:
+        typer.echo(f"записано   {record}")
     raise typer.Exit(EXIT_OK if result.ok else EXIT_FOUND_ERRORS)
 
 

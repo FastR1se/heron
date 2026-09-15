@@ -111,6 +111,19 @@ class FrozenClock:
         return None
 
 
+@runtime_checkable
+class Recorder(Protocol):
+    """Where a run goes while it happens (ADR-0038).
+
+    ``wall`` is the executor's clock. ``world`` of a command is the stamp of the
+    state it was computed from.
+    """
+
+    def state(self, wall: float, state: RobotState) -> None: ...
+
+    def command(self, wall: float, world: float, command: Command) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RunResult:
     """What one task did."""
@@ -155,11 +168,13 @@ class Executor:
         *,
         clock: Clock | None = None,
         library: SkillLibrary | None = None,
+        recorder: Recorder | None = None,
     ) -> None:
         self.adapter = adapter
         self.profile = profile
         self.clock: Clock = clock if clock is not None else WallClock()
         self.library = library if library is not None else SkillLibrary()
+        self.recorder = recorder
         self.period = 1.0 / profile.contract.command_rate_hz
         self.watchdog = watchdog_timeout(profile)
 
@@ -204,6 +219,10 @@ class Executor:
             raise IncompatibleSkillError(report)
 
         ctx = AdapterContext(profile_=self.profile, adapter=self.adapter)
+        recorder = self.recorder
+        if recorder is not None:
+            clock = self.clock
+            ctx.on_sent = lambda cmd: recorder.command(clock.now(), ctx.current_time, cmd)
         skill.start(dict(goal or {}), ctx)
 
         seen: list[RobotState] = []
@@ -215,6 +234,8 @@ class Executor:
             state = self.adapter.read_state()
             read_at = self.clock.now()
             seen.append(state)
+            if recorder is not None:
+                recorder.state(read_at, state)
 
             # Freshness counts from the moment a new reading was in hand, not
             # from the start of the cycle that fetched it. The first read may

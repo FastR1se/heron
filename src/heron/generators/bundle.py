@@ -42,7 +42,7 @@ from .common import (
     sorted_files,
 )
 from .description import description_copy
-from .launch import launch_file
+from .launch import launch_file, scene_environment
 from .rviz import rviz_file
 from .twin import GAZEBO, GazeboTwin
 from .world import WORLD_FILE, world_file
@@ -231,6 +231,20 @@ def _manifest(
         path=PurePosixPath(MANIFEST_FILE),
         content=json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
+
+
+def world_environment(scenario: Scenario, registry: Registry) -> dict[str, str]:
+    """Variables every process of this scenario's world starts with, without generating it.
+
+    The derivation the launch file is written from (ADR-0034), for a process that
+    joins the world rather than starts it (ADR-0039). Empty for a world these
+    generators do not produce: there the twin is the world itself.
+    """
+    backend = scenario.world.backend
+    if backend not in GENERATED_BACKENDS:
+        return {}
+    instances = [attach_twin(item, backend) for item in scenario_instances(scenario, registry)]
+    return scene_environment(instances)
 
 
 def build(

@@ -137,6 +137,16 @@ jobs:
           uv run heron sim run examples/scenarios/humanoid.yaml --into generated/humanoid --registry examples/robots --dry-run
           uv run heron run examples/scenarios/humanoid.yaml --registry examples/robots --dry-run
 
+      # Фаза 4, этап 7: комплекс. Без пакета G1 сцена проверяется, а окружение мира на этой
+      # машине не выводится — план манипулятора обязан это назвать, а не промолчать (ADR-0039).
+      - name: Сцена комплекса проверяется
+        run: |
+          uv run heron validate examples/scenarios/complex.yaml --registry examples/robots
+          uv run heron run examples/scenarios/complex.yaml --registry examples/robots --robot arm1 \
+            --skill move_joints -g "target=[0,-0.6,1.2,0,0.9,0]" -g duration=4 --dry-run > run-complex.txt
+          cat run-complex.txt
+          grep -F "окружение не выводится" run-complex.txt
+
       # Фаза 4, этап 4: мир MuJoCo — двойник производителя (ADR-0030). Без пакета робота
       # сцена проверяется (MJCF, сцена, шаг), а мир не строится — двойника некому поставить.
       - name: Сцена с двойником MuJoCo проверяется

@@ -17,24 +17,35 @@ a run.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+import os
+import sys
+from collections.abc import Mapping, MutableMapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..core.enums import Role, Status
 from ..core.models import RobotProfile, Scenario, ScenarioRobot, Task, sim_backend_of, sim_target
 from ..core.plugins import PluginError, load
 from ..core.protocols import ControlAdapter
 from ..core.twins import TwinError, find_twin
+from ..generators.bundle import world_environment
+from ..generators.common import GeneratorError
 from ..generators.twin import GazeboTwin
 from ..registry.registry import Registry
 from ..sdk.executor import Executor, RunResult
+from ..sdk.record import McapRecorder, RecordError, require_writer
 from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..validator.environment import Machine, check_adapter
 from ..validator.report import Report
 from ..validator.rules import check_scenario
 
 NAMESPACE_PARAM = "namespace"
+SHOWN_VALUE_WIDTH = 40
+"""Longer values of the world's environment are named in the plan, not printed: a
+CycloneDDS configuration is a screen of XML."""
 
 
 class RunError(RuntimeError):
@@ -194,6 +205,44 @@ def plan(
     return lines
 
 
+def environment_conflicts(world: Mapping[str, str], process: Mapping[str, str]) -> list[str]:
+    """Variables this process already has with a value the world does not (ADR-0039)."""
+    return [
+        f"{name}: у процесса {process[name]!r}, у мира {value!r}"
+        for name, value in world.items()
+        if name in process and process[name] != value
+    ]
+
+
+def describe_environment(world: Mapping[str, str]) -> str:
+    return ", ".join(
+        f"{name}={value}" if len(value) <= SHOWN_VALUE_WIDTH else f"{name}=<{len(value)} симв.>"
+        for name, value in world.items()
+    )
+
+
+def record_metadata(
+    scenario: Scenario, robot: ScenarioRobot, profile: RobotProfile, target: str, task: Task
+) -> dict[str, str]:
+    """What a record says about its run before the first tick (ADR-0038)."""
+    contract = profile.contract
+    return {
+        "scenario": scenario.name,
+        "backend": scenario.world.backend,
+        "robot": robot.id,
+        "profile": profile.name,
+        "target": target,
+        "adapter": profile.adapters[target].plugin,
+        "contract_id": contract.contract_id,
+        "revision": str(contract.revision),
+        "contract": contract.canonical_json(),
+        "skill": task.skill,
+        "goal": json.dumps(task.goal, ensure_ascii=False, default=str),
+        "platform_version": __version__,
+        "started_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
+
 def execute(
     scenario: Scenario,
     registry: Registry,
@@ -206,6 +255,8 @@ def execute(
     dry_run: bool = False,
     machine: Machine | None = None,
     scenario_path: Path | None = None,
+    record: Path | None = None,
+    environ: MutableMapping[str, str] | None = None,
 ) -> tuple[list[str], RunResult | None]:
     """Set the run up, then run it. Returns the plan it printed and the result.
 
@@ -214,7 +265,11 @@ def execute(
     check look redundant -- it is not: ``sim run`` refuses to *build* a bad
     scene, and nothing stops a hand-started world or an edited profile from
     putting one there anyway (invariant 6).
+
+    ``environ`` is the environment of this process, the one the world's is applied
+    to (ADR-0039); ``record`` is where the run is written as it happens (ADR-0038).
     """
+    process = os.environ if environ is None else environ
     report = check_scenario(scenario, registry, path=scenario_path)
     if not report.ok:
         raise RunError(
@@ -232,10 +287,39 @@ def execute(
         raise RunError(str(exc)) from exc
 
     lines = plan(scenario, robot, profile, chosen, task)
+    try:
+        world = world_environment(scenario, registry)
+    except GeneratorError as exc:
+        if not dry_run:
+            raise RunError(
+                f"{robot.id}: окружение мира {scenario.name!r} на этой машине не выводится, "
+                f"а без него связь ждала бы робота в чужом домене (ADR-0039): {exc}"
+            ) from exc
+        world = {}
+        lines.append(f"окружение не выводится: {exc}")
+    conflicts = environment_conflicts(world, process)
+    if conflicts:
+        raise RunError(
+            f"{robot.id}: окружение процесса расходится с окружением мира {scenario.name!r}, "
+            f"в котором работает робот (ADR-0039):\n  "
+            + "\n  ".join(conflicts)
+            + "\nуберите эти переменные из окружения процесса или поднимите мир в нём"
+        )
+    if world:
+        lines.append(f"окружение {describe_environment(world)}")
+    if record is not None:
+        lines.append(f"запись    {record}")
     if dry_run:
         # Nothing is connected and nothing is loaded: a dry run must be
         # possible on a machine that has neither the robot nor the plugin.
         return lines, None
+
+    if record is not None:
+        try:
+            require_writer()
+        except RecordError as exc:
+            raise RunError(f"{robot.id}: {exc}") from exc
+    process.update(world)
 
     # What the adapter declares it needs is checked before it is constructed:
     # an unsourced environment is a named finding, not an import error from
@@ -261,10 +345,25 @@ def execute(
             f"{robot.id}: связь {chosen!r} не установлена — {exc}"
         ) from exc
     try:
-        result = Executor(adapter, profile, library=library).run_task(task)
+        recorder = _open_record(record, record_metadata(scenario, robot, profile, chosen, task))
+        result: RunResult | None = None
+        try:
+            result = Executor(adapter, profile, library=library, recorder=recorder).run_task(task)
+        finally:
+            if recorder is not None:
+                recorder.close(result, error=sys.exc_info()[1])
     finally:
         adapter.disconnect()
     return lines, result
+
+
+def _open_record(path: Path | None, run: Mapping[str, str]) -> McapRecorder | None:
+    if path is None:
+        return None
+    try:
+        return McapRecorder(path, run)
+    except RecordError as exc:
+        raise RunError(str(exc)) from exc
 
 
 def describe(result: RunResult) -> list[str]:
