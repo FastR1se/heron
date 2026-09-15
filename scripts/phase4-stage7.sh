@@ -362,6 +362,11 @@ step_scene() {
         stop_group "$pgid" 30; return
     fi
     record "scene состояние G1" ok "$(tail -1 "$dir/g1-before.txt")"
+    # G1 falls before its first command (ADR-0018). "Before" is the fallen pose, as in stage 6:
+    # taken at the first state, it compared a standing robot with a lying one (run 2).
+    sleep 8
+    clean "cd '$REPO_ROOT' && timeout 60 '$OWN_PY' '$PY_DIR/window.py' '$G1_PROFILE' 30 1 '$dir/g1-before.json'" > "$dir/g1-before.txt" 2>&1
+    cat "$dir/g1-before.txt"
 
     clean "$witness_env && ros2 daemon stop >/dev/null 2>&1; timeout 40 ros2 control list_controllers -c /g1/controller_manager; timeout 40 ros2 control list_controllers -c /arm1/controller_manager" > "$dir/controllers.txt" 2>&1
     sed 's/^/      /' "$dir/controllers.txt"
