@@ -74,11 +74,28 @@ class VendorBridge:
     def control_plane(self, namespace: str, profile: RobotProfile) -> Mapping[str, str | None]:
         return {"command_topic": "/lowcmd", "state_topic": "/lowstate"}
 
+    def environment(self, instance: Instance) -> Mapping[str, str]:
+        return {"RMW_IMPLEMENTATION": "rmw_vendor", "VENDOR_LINK": f"robot={instance.id}"}
+
 
 class VendorSimulator(VendorBridge):
     """A vendor's simulator: it steps the physics itself."""
 
     kind = TwinKind.OWNS_PHYSICS
+
+
+class NamespacedVendor(VendorBridge):
+    """A vendor's bridge whose topics live under the robot, and whose link is per robot."""
+
+    def control_plane(self, namespace: str, profile: RobotProfile) -> Mapping[str, str | None]:
+        return {"command_topic": f"/{namespace}/lowcmd", "state_topic": f"/{namespace}/lowstate"}
+
+
+class SharedVendor(NamespacedVendor):
+    """Asks the world for the same environment whichever robot it speaks for."""
+
+    def environment(self, instance: Instance) -> Mapping[str, str]:
+        return {"RMW_IMPLEMENTATION": "rmw_vendor"}
 
 
 class Mute:
@@ -223,6 +240,59 @@ def test_a_vendor_twin_joins_the_scene_the_generators_never_heard_of(
     assert robots["arm1"]["control"] == {"command_topic": "/lowcmd", "state_topic": "/lowstate"}
     assert "control" not in robots["arm2"]
     assert "<static>true</static>" in _file(bundle, "arm2/description.urdf")
+
+
+def test_the_world_starts_in_the_environment_its_twins_ask_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0034: set in the launch, by name, before the first process it has to reach."""
+    monkeypatch.setattr(generation, "find_twin", _only(VendorBridge()))
+    bundle = build(_scenario(), _registry(tmp_path), into=tmp_path / "out")
+
+    launch = ET.fromstring(_file(bundle, "bringup.launch.xml").split("?>", 1)[1])
+    children = [child.tag for child in launch]
+    assert [(item.get("name"), item.get("value")) for item in launch.iter("set_env")] == [
+        ("RMW_IMPLEMENTATION", "rmw_vendor"),
+        ("VENDOR_LINK", "robot=arm1"),
+    ]
+    first_process = min(children.index(tag) for tag in ("include", "node"))
+    assert max(i for i, tag in enumerate(children) if tag == "set_env") < first_process
+
+
+def test_the_builtin_twin_asks_the_world_for_no_environment(tmp_path: Path) -> None:
+    bundle = build(_scenario(), _registry(tmp_path, plugin="ros2_control"), into=tmp_path / "out")
+    assert "set_env" not in _file(bundle, "bringup.launch.xml")
+
+
+def test_twins_asking_one_variable_differently_get_no_scene(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every controller manager lives in the simulator's process: one world, one environment."""
+    monkeypatch.setattr(generation, "find_twin", _only(NamespacedVendor()))
+    with pytest.raises(GeneratorError, match="VENDOR_LINK") as caught:
+        build(_scenario(roles=("scripted", "scripted")), _registry(tmp_path), into=tmp_path / "out")
+    assert "robot=arm1" in str(caught.value) and "robot=arm2" in str(caught.value)
+
+
+def test_twins_asking_one_variable_alike_share_the_world(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(generation, "find_twin", _only(SharedVendor()))
+    bundle = build(
+        _scenario(roles=("scripted", "scripted")), _registry(tmp_path), into=tmp_path / "out"
+    )
+    assert _file(bundle, "bringup.launch.xml").count("<set_env") == 1
+
+
+def test_two_robots_on_one_fixed_topic_get_no_scene(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A robot whose vendor fixed its topic names listens at the root; a second one there
+    would take the first one's commands (ADR-0034, p. 5)."""
+    monkeypatch.setattr(generation, "find_twin", _only(VendorBridge()))
+    with pytest.raises(GeneratorError, match="/lowcmd") as caught:
+        build(_scenario(roles=("scripted", "scripted")), _registry(tmp_path), into=tmp_path / "out")
+    assert "arm1" in str(caught.value) and "ADR-0034" in str(caught.value)
 
 
 def test_a_driven_robot_nobody_answers_for_gets_no_scene(

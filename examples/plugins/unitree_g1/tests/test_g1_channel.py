@@ -72,9 +72,29 @@ def test_a_wrong_param_is_named(params: dict[str, object], key: str) -> None:
         LinkConfig.from_params(params)
 
 
-def test_with_peers_the_configuration_is_the_one_proven_against_the_twin() -> None:
+def test_with_peers_the_configuration_is_the_proven_one_with_room_for_a_scene() -> None:
+    """The proven form plus one element: a Gazebo scene is about ten participants on one
+    machine, and the default of 0.10 gives out at the tenth (ADR-0034, p. 4)."""
+    import unitree_g1.channel as channel
+
+    proven = PROVEN_PEERS_LO.replace(
+        "<ParticipantIndex>auto</ParticipantIndex>",
+        "<ParticipantIndex>auto</ParticipantIndex>"
+        f"<MaxAutoParticipantIndex>{channel.MAX_PARTICIPANT_INDEX}</MaxAutoParticipantIndex>",
+    )
     link = LinkConfig(domain=1, interface="lo", peers=("127.0.0.1",))
-    assert canonical(link.cyclonedds_xml()) == canonical(PROVEN_PEERS_LO)
+    assert channel.MAX_PARTICIPANT_INDEX > 9
+    assert canonical(link.cyclonedds_xml()) == canonical(proven)
+
+
+def test_a_dds_topic_of_the_robot_has_its_ros2_name() -> None:
+    """Fact 0.7: ``rt/lowcmd`` on the wire is ``/lowcmd`` to ROS 2."""
+    import unitree_g1.channel as channel
+
+    assert channel.ros2_topic(channel.COMMAND_TOPIC) == "/lowcmd"
+    assert channel.ros2_topic(channel.STATE_TOPIC) == "/lowstate"
+    with pytest.raises(ValueError, match="rt/"):
+        channel.ros2_topic("lowcmd")
 
 
 def test_without_peers_discovery_is_left_to_multicast() -> None:

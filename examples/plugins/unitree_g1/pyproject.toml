@@ -24,6 +24,8 @@ unitree_g1_dds = "unitree_g1.adapter:G1DdsAdapter"
 # (ADR-0021). Found by the pair it declares, not by this name (ADR-0024).
 [project.entry-points."heron.twins"]
 unitree_g1_mujoco = "unitree_g1.twin:G1MujocoTwin"
+# The controller itself is a ROS 2 package under ros2/, built with colcon (ADR-0033).
+unitree_g1_gazebo = "unitree_g1.bridge:G1GazeboTwin"
 
 [build-system]
 requires = ["hatchling"]

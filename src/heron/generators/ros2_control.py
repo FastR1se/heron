@@ -32,7 +32,7 @@ they are written down; that one decides what they are.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 from xml.etree import ElementTree as ET
@@ -213,17 +213,85 @@ def simulator_plugin_block(instance: Instance, controllers: Path) -> ET.Element:
     return element
 
 
+@dataclass(frozen=True, slots=True)
+class Controller:
+    """One controller a robot's manager loads: its name, its class, its own parameters."""
+
+    name: str
+    type: str
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+
+
+def broadcaster() -> Controller:
+    """The joint state broadcaster, which every driven robot's manager runs.
+
+    Where it publishes is stated, not inherited. Its default today resolves to
+    <namespace>/joint_states, which is what the adapter and the description
+    publisher subscribe to -- but a default is a fact about someone else's source,
+    and they would find an empty topic on the day it changed (ADR-0014).
+    """
+    return Controller(BROADCASTER, BROADCASTER_TYPE, {names.LOCAL_TOPICS_PARAM: False})
+
+
+def controllers_path(instance: Instance, root: Path) -> Path:
+    """Where the manager's configuration of this robot lands, as the simulator reads it."""
+    return (root / Path(*instance.directory.parts) / CONTROLLERS_FILE).resolve()
+
+
+def manager_config(instance: Instance, controllers: Sequence[Controller]) -> GeneratedFile:
+    """Configuration of the controller manager and of the controllers it loads.
+
+    The manager runs at ``state_rate_hz``: the rate the contract promises states at
+    is the rate the stack reads the joints at.
+    """
+    profile = instance.profile
+    manager: dict[str, Any] = {"update_rate": int(profile.contract.state_rate_hz)}
+    for controller in controllers:
+        manager[controller.name] = {"type": controller.type}
+
+    # Keys are fully qualified: the controller manager of this robot runs under
+    # the robot's namespace, and a parameter file keyed on a bare node name never
+    # reaches it. Nothing warns about that -- the parameters are simply absent,
+    # and the first sign is a controller that "has no type".
+    document: dict[str, Any] = {
+        node_name(instance, "controller_manager"): {"ros__parameters": manager},
+    }
+    for controller in controllers:
+        document[node_name(instance, controller.name)] = {
+            "ros__parameters": dict(controller.parameters)
+        }
+    body = yaml.safe_dump(document, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    head = header(
+        "Конфигурация контроллеров",
+        f"профиль {profile.name}, режим {profile.control_mode}",
+        contract_id=profile.contract.contract_id,
+    )
+    return GeneratedFile(path=instance.directory / CONTROLLERS_FILE, content=head + body)
+
+
+def spawner(controller: str) -> LaunchNode:
+    """The node that loads and activates one controller of the robot's manager.
+
+    A spawner waits for a controller manager that only exists once the simulator
+    has loaded the model; it waits with its own timeout, not a generated sleep.
+    """
+    return LaunchNode(
+        package="controller_manager",
+        executable="spawner",
+        name=f"spawn_{controller}",
+        arguments=(
+            controller,
+            "--controller-manager", "controller_manager",
+            "--controller-manager-timeout", SPAWNER_TIMEOUT,
+        ),
+    )
+
+
 def controllers_config(instance: Instance) -> GeneratedFile:
     """Configuration of the controller manager and of the robot's controllers."""
     profile = instance.profile
-    name = controller_name(profile)
     joints = list(profile.contract.joint_order)
 
-    manager: dict[str, Any] = {
-        "update_rate": int(profile.contract.state_rate_hz),
-        BROADCASTER: {"type": BROADCASTER_TYPE},
-        name: {"type": controller_type(profile)},
-    }
     controller: dict[str, Any] = {"joints": joints}
     if names.uses_trajectory_controller(profile):
         controller["command_interfaces"] = [command_interface(profile)]
@@ -238,28 +306,10 @@ def controllers_config(instance: Instance) -> GeneratedFile:
             for joint, p, d in zip(joints, action.kp, action.kd, strict=True)
         }
 
-    # Where the broadcaster publishes is stated, not inherited. Its default
-    # today resolves to <namespace>/joint_states, which is what the adapter
-    # subscribes to -- but a default is a fact about someone else's source, and
-    # the adapter would find an empty topic on the day it changed (ADR-0014).
-    broadcaster: dict[str, Any] = {names.LOCAL_TOPICS_PARAM: False}
-
-    # Keys are fully qualified: the controller manager of this robot runs under
-    # the robot's namespace, and a parameter file keyed on a bare node name never
-    # reaches it. Nothing warns about that -- the parameters are simply absent,
-    # and the first sign is a controller that "has no type".
-    document: dict[str, Any] = {
-        node_name(instance, "controller_manager"): {"ros__parameters": manager},
-        node_name(instance, BROADCASTER): {"ros__parameters": broadcaster},
-        node_name(instance, name): {"ros__parameters": controller},
-    }
-    body = yaml.safe_dump(document, allow_unicode=True, sort_keys=False, default_flow_style=False)
-    head = header(
-        "Конфигурация контроллеров",
-        f"профиль {profile.name}, режим {profile.control_mode}",
-        contract_id=profile.contract.contract_id,
+    return manager_config(
+        instance,
+        [broadcaster(), Controller(controller_name(profile), controller_type(profile), controller)],
     )
-    return GeneratedFile(path=instance.directory / CONTROLLERS_FILE, content=head + body)
 
 
 def spawner_arguments(instance: Instance) -> list[str]:
@@ -285,35 +335,23 @@ class Ros2ControlTwin:
     def description_elements(
         self, instance: Instance, description: UrdfModel, root: Path
     ) -> list[ET.Element]:
-        controllers = (root / Path(*instance.directory.parts) / CONTROLLERS_FILE).resolve()
         return [
             ros2_control_block(instance, description),
-            simulator_plugin_block(instance, controllers),
+            simulator_plugin_block(instance, controllers_path(instance, root)),
         ]
 
     def files(self, instance: Instance, root: Path) -> list[GeneratedFile]:
         return [controllers_config(instance)]
 
     def launch_nodes(self, instance: Instance) -> list[LaunchNode]:
-        # A spawner waits for a controller manager that only exists once the
-        # simulator has loaded the model; it waits with its own timeout, not a
-        # generated sleep.
-        return [
-            LaunchNode(
-                package="controller_manager",
-                executable="spawner",
-                name=f"spawn_{controller}",
-                arguments=(
-                    controller,
-                    "--controller-manager", "controller_manager",
-                    "--controller-manager-timeout", SPAWNER_TIMEOUT,
-                ),
-            )
-            for controller in spawner_arguments(instance)
-        ]
+        return [spawner(controller) for controller in spawner_arguments(instance)]
 
     def control_plane(self, namespace: str, profile: RobotProfile) -> Mapping[str, str | None]:
         return names.control_plane(namespace, profile)
+
+    def environment(self, instance: Instance) -> Mapping[str, str]:
+        # The link is ROS 2 itself: it works in whatever environment the world has.
+        return {}
 
 
 def merged_description(instance: Instance, root: Path) -> GeneratedFile:

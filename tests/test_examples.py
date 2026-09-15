@@ -244,6 +244,50 @@ def test_the_vendor_twin_scenario_validates_and_starts_the_vendors_program(
     assert scenario.task == gazebo.task, "сверка двойников (этап 6) — одна цель в обоих мирах"
 
 
+def test_the_vendor_robot_joins_gazebo_through_its_bridge(
+    examples_dir: Path, robots: Path, tmp_path: Path
+) -> None:
+    """Stage 5 minus the simulator (ADR-0033, ADR-0034): the same adapter as in MuJoCo, its
+    twin in Gazebo found by the pair, the scene in the environment of the same link."""
+    import json
+    from xml.etree import ElementTree as ET
+
+    import yaml
+
+    from heron.sim.gazebo import GazeboBackend
+    from heron.sim.process import PlanningLauncher
+
+    _vendor_profile(robots)
+    path = examples_dir / "scenarios" / "humanoid.yaml"
+    scenario = load_scenario(path)
+    profile = Registry([robots]).load(G1)
+    assert profile.adapters["sim.gazebo"] == profile.adapters["sim.mujoco"]
+    assert profile.adapters["sim.gazebo"].plugin == "unitree_g1_dds"
+
+    planner = PlanningLauncher()
+    backend = GazeboBackend(Registry([robots]), into=tmp_path, launcher=planner, scenario_path=path)
+    world = backend.build_world(scenario)
+    backend.start()
+    assert planner.commands and planner.commands[0][:2] == ("ros2", "launch")
+
+    files = {str(item.path): item.content for item in world.bundle.files}
+    manifest = json.loads(files["manifest.json"])
+    assert manifest["robots"][0]["control"]["command_topic"] == "/lowcmd"
+    assert manifest["robots"][0]["control"]["state_message"] == "unitree_hg/msg/LowState"
+
+    controllers = yaml.safe_load(files["g1/controllers.yaml"])
+    bridge = controllers["/g1/low_level_bridge"]["ros__parameters"]
+    assert bridge["joints"] == list(profile.contract.joint_order)
+    assert bridge["mode_machine"] == 4
+    assert bridge["slots"][13:] == [15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
+
+    launch = ET.fromstring(files["bringup.launch.xml"].split("?>", 1)[1])
+    environment = {item.get("name"): item.get("value") for item in launch.iter("set_env")}
+    assert environment["ROS_DOMAIN_ID"] == "1"
+    assert environment["RMW_IMPLEMENTATION"] == "rmw_cyclonedds_cpp"
+    assert '<Peer address="127.0.0.1"' in (environment["CYCLONEDDS_URI"] or "")
+
+
 def test_the_vendor_robot_generates_with_every_mesh_anchored(
     robots: Path, tmp_path: Path
 ) -> None:

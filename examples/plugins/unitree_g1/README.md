@@ -7,7 +7,7 @@
 |---|---|---|
 | `adapters: unitree_g1_dds` | DDS-адаптер: один на двойник MuJoCo, мост в Gazebo и железо | 3 |
 | `twins: unitree_g1_mujoco` | двойник MuJoCo: `unitree_mujoco` производителя без правок, род «владеет физикой» | 4 |
-| двойник Gazebo | мост `ros2_control`, род «мост» | 5 |
+| `twins: unitree_g1_gazebo` | двойник Gazebo: контроллер `unitree_g1_bridge/LowLevelBridge` из `ros2/`, род «мост» | 5 |
 
 ## Установка
 
@@ -54,6 +54,43 @@ adapters:
 
 Робот падает сразу после запуска мира: до первой команды момента нет, а эластичная лента выключена в
 `config.yaml` производителя. Это условие прогона (ADR-0018), а не дефект.
+
+## Двойник Gazebo
+
+Мост — двойник того, что у робота на борту: прошивка каждого привода исполняет закон
+`tau = tau_ff + kp·(q* − q) + kd·(dq* − dq)` последней команды, в Gazebo это делает контроллер
+`ros2_control` в менеджере, синхронно с физикой (ADR-0033). Адаптер тот же, что с MuJoCo и железом;
+в профиле `sim.gazebo` и `sim.mujoco` называют одну связь.
+
+Контроллер — ROS 2-пакет `ros2/unitree_g1_bridge`, собирается рядом с `unitree_hg`:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths examples/plugins/unitree_g1/ros2 <unitree_ros2>/cyclonedds_ws/src/unitree/unitree_hg \
+    --packages-select unitree_hg unitree_g1_bridge
+source install/setup.bash
+```
+
+Всё, что знает о роботе, контроллер получает параметрами от `unitree_g1.bridge`: суставы контракта, слот
+каждого, `mode_machine` тела, топики `/lowcmd` и `/lowstate`. Сцена работает в окружении связи
+(ADR-0034): `rmw_cyclonedds_cpp`, домен из `params`, `CYCLONEDDS_URI` — та же конфигурация, что строит
+канал адаптера; генератор пишет их `<set_env>` в файл запуска.
+
+| Что делает мост | Как |
+|---|---|
+| команда | последний `LowCmd` действует до следующего; слот с `mode = 0` — без момента |
+| до первой команды | момента нет, робот падает — как в двойнике MuJoCo |
+| `LowState` | каждый такт менеджера (`state_rate_hz`): `q`, `dq`, `tau_est` = приказанный момент, `tick` = время мира в мс, `mode_machine` |
+| не заполняет | IMU, `crc`, `version` — контракт базы не наблюдает, адаптер CRC состояния не проверяет |
+| топики | в корне, как у робота: один G1 на домен DDS, второй в сцене — отказ генератора |
+
+| Требование (мир) | Зачем |
+|---|---|
+| ROS 2-пакеты `unitree_g1_bridge`, `unitree_hg` | контроллер и его сообщения, сборка `colcon` |
+| `rmw_cyclonedds_cpp` | CycloneDDS 0.10, как у робота (ADR-0022) |
+| `controller_manager`, `gz_ros2_control`, `joint_state_broadcaster` | менеджер в Gazebo, спаунер, состояния для визуализации |
+
+Проверка на Linux — `scripts/phase4-stage5.sh`.
 
 ## Что адаптер решает сам
 

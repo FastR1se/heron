@@ -173,13 +173,39 @@ def _robot(parent: ET.Element, instance: Instance) -> None:
         ET.SubElement(group, "node", attributes)
 
 
+def scene_environment(instances: Sequence[Instance]) -> dict[str, str]:
+    """Variables every process of the world starts with, by name (ADR-0034).
+
+    Asked of each robot's twin. A variable is the world's, not a robot's -- the
+    controller managers of all robots share the simulator's process -- so two
+    twins asking one variable for different values describe no world that can run.
+    """
+    wanted: dict[str, tuple[str, str]] = {}
+    for instance in instances:
+        if instance.twin is None:
+            continue
+        for name, value in instance.twin.environment(instance).items():
+            held = wanted.setdefault(name, (value, instance.id))
+            if held[0] != value:
+                raise GeneratorError(
+                    f"{instance.id}: двойник требует {name}={value!r}, а двойник робота "
+                    f"{held[1]} — {name}={held[0]!r}. Процессы мира работают в одном "
+                    f"окружении, выполнить оба нельзя (ADR-0034)"
+                )
+    return {name: wanted[name][0] for name in sorted(wanted)}
+
+
 def launch_tree(instances: Sequence[Instance], world: str) -> ET.Element:
-    """The launch description: simulator, clock bridge, robots, visualization."""
+    """The launch description: environment, simulator, clock bridge, robots, visualization."""
     launch = ET.Element("launch")
     _argument(launch, "headless", "false")
     _argument(launch, "rviz", "true")
     _argument(launch, BUNDLE_VAR, "$(dirname)")
     _argument(launch, "world", world)
+
+    # Before the first process: a variable set later reaches only what starts later.
+    for name, value in scene_environment(instances).items():
+        ET.SubElement(launch, "set_env", {"name": name, "value": value})
 
     _simulator(launch, "$(var world)")
     ET.SubElement(

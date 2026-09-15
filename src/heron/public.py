@@ -32,6 +32,9 @@ PUBLIC_MODULES: Final = frozenset(
         # What a twin in a Gazebo world contributes, and the values it returns.
         "generators.common",
         "generators.twin",
+        # The vocabulary of ros2_control in a Gazebo world, for a twin that is itself
+        # a controller: the hardware block, the manager's file, spawners (ADR-0033).
+        "generators.ros2_control",
         # What a simulation backend and a twin's processes are started with.
         "sim.base",
         "sim.process",

@@ -26,8 +26,32 @@ STATE_TOPIC: Final = "rt/lowstate"
 """DDS topic names the robot and the vendor's twin use. ROS 2 sees them as
 ``/lowcmd`` and ``/lowstate`` (journal 2026-09-13, session 5, fact 0.7)."""
 
+ROS2_TOPIC_PREFIX: Final = "rt/"
+"""What ``rmw_cyclonedds_cpp`` puts in front of a ROS 2 topic on the wire."""
+
 QUEUE_DEPTH: Final = 64
 """Most samples one read takes to reach the newest."""
+
+MAX_PARTICIPANT_INDEX: Final = 32
+"""Highest participant index CycloneDDS picks, and probes a peer for, under unicast discovery.
+
+The default of 0.10 is 9. A Gazebo scene with the bridge is about ten participants on
+one machine -- launch, simulator, clock bridge, description publisher, spawners,
+visualization, the adapter, a witness -- and the tenth would find no index, while a
+peer is only probed at the ports of indices up to the maximum (ADR-0034, p. 4)."""
+
+
+def ros2_topic(dds_topic: str) -> str:
+    """The ROS 2 name of a DDS topic of the robot: ``rt/lowcmd`` is ``/lowcmd``.
+
+    A bridge speaking ROS 2 subscribes under this name and meets the adapter, which
+    speaks DDS directly, on the same topic (fact 0.7).
+    """
+    if not dds_topic.startswith(ROS2_TOPIC_PREFIX):
+        raise ValueError(
+            f"{dds_topic!r}: не топик ROS 2 на проводе — нет префикса {ROS2_TOPIC_PREFIX!r}"
+        )
+    return "/" + dds_topic.removeprefix(ROS2_TOPIC_PREFIX)
 
 
 class ChannelError(RuntimeError):
@@ -151,8 +175,12 @@ class LinkConfig:
         Without peers: the interface and nothing else, discovery by multicast,
         as the vendor's SDK configures the robot. With peers: multicast off and
         unicast discovery -- the form proven against the vendor's twin on ``lo``
-        (journal 2026-09-13, session 9). Built as a tree, so an interface name
-        cannot close a tag.
+        (journal 2026-09-13, session 9) -- with room for the participants of a
+        whole scene (``MAX_PARTICIPANT_INDEX``). Built as a tree, so an interface
+        name cannot close a tag.
+
+        The bridge's side of a Gazebo scene runs on this same text (ADR-0034), so
+        the two sides of a local link cannot disagree about it.
         """
         root = ET.Element("CycloneDDS")
         domain = ET.SubElement(root, "Domain", Id="any")
@@ -163,6 +191,7 @@ class LinkConfig:
             ET.SubElement(general, "AllowMulticast").text = "false"
             discovery = ET.SubElement(domain, "Discovery")
             ET.SubElement(discovery, "ParticipantIndex").text = "auto"
+            ET.SubElement(discovery, "MaxAutoParticipantIndex").text = str(MAX_PARTICIPANT_INDEX)
             peers = ET.SubElement(discovery, "Peers")
             for address in self.peers:
                 ET.SubElement(peers, "Peer", address=address)

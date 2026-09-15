@@ -168,6 +168,35 @@ def _root_links(instances: Sequence[Instance]) -> dict[str, str]:
     return frames
 
 
+LINK_TOPICS: Final = ("command_topic", "state_topic")
+
+
+def _check_topics(instances: Sequence[Instance]) -> None:
+    """No two robots of a scene on one topic of their links (ADR-0034, p. 5).
+
+    Topics under a robot's namespace never meet. A robot whose vendor fixed its
+    topic names -- a DDS robot listens at the root, as the hardware does -- meets
+    every other robot of its kind there: a command would reach both, and a robot
+    that moves and is wrong is the failure this platform exists to prevent.
+    """
+    owners: dict[str, str] = {}
+    for instance in instances:
+        if instance.twin is None:
+            continue
+        plane = instance.twin.control_plane(namespace(instance), instance.profile)
+        for key in LINK_TOPICS:
+            topic = plane.get(key)
+            if topic is None:
+                continue
+            owner = owners.setdefault(topic, instance.id)
+            if owner != instance.id:
+                raise GeneratorError(
+                    f"{instance.id}: связь робота использует топик {topic}, который уже "
+                    f"использует {owner}. Команда ушла бы обоим; такой робот — один на домен "
+                    f"DDS (ADR-0034)"
+                )
+
+
 def _manifest_robot(item: Instance) -> dict[str, Any]:
     """One robot's line in the manifest.
 
@@ -260,6 +289,7 @@ def _assemble(
         )
 
     instances = [attach_twin(instance, scenario.world.backend) for instance in instances]
+    _check_topics(instances)
     files: list[GeneratedFile] = []
 
     for instance in instances:

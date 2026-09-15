@@ -60,6 +60,15 @@ class GazeboTwin(Twin, Protocol):
     def control_plane(self, namespace: str, profile: RobotProfile) -> Mapping[str, str | None]:
         """Names an adapter finds at run time, as written into the manifest (ADR-0014)."""
 
+    def environment(self, instance: Instance) -> Mapping[str, str]:
+        """Variables the processes of the world need for this robot's link (ADR-0034).
+
+        One world, one environment: every controller manager lives in the
+        simulator's process, so a variable is the scene's, not the robot's. The
+        launch sets them before anything starts, and two twins asking one variable
+        for different values get no scene. Empty for a link that is ROS 2 itself.
+        """
+
 
 def require_twin(instance: Instance) -> GazeboTwin:
     """The twin of a driven robot. A driven robot without one has no link."""

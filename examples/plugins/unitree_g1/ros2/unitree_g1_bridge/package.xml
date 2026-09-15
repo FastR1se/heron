@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>unitree_g1_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    The Gazebo twin of a G1's drive firmware: a ros2_control controller that evaluates
+    the drive law of every LowCmd at the controller manager's rate and publishes LowState
+    (ADR-0033). Everything specific to the robot -- joints, slots, mode_machine, topics --
+    arrives as parameters written by the package's Python side.
+  </description>
+  <maintainer email="noreply@example.com">unitree-g1 package</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>controller_interface</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>unitree_hg</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

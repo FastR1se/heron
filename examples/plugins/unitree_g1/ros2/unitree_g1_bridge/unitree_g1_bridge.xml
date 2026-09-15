@@ -1,0 +1,11 @@
+<library path="unitree_g1_bridge">
+  <class
+    name="unitree_g1_bridge/LowLevelBridge"
+    type="unitree_g1_bridge::LowLevelBridge"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>
+      LowCmd in, effort out, LowState back: a G1's drive law evaluated in the controller
+      manager's update, in step with the physics (ADR-0033).
+    </description>
+  </class>
+</library>
