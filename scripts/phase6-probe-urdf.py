@@ -23,6 +23,7 @@ parser.add_argument("--merge-fixed-joints", choices=["yes", "no"], required=True
 parser.add_argument("--out", required=True, help="JSON with the facts")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
+print("[probe] запуск Kit", flush=True)
 simulation_app = AppLauncher(args).app
 
 # Isaac Lab modules need a running Kit application: imported only after the launcher.
@@ -36,7 +37,13 @@ def first(tensor: object) -> object:
     return tensor[0].tolist() if tensor is not None else None  # type: ignore[index, attr-defined]
 
 
+def mark(stage: str) -> None:
+    """Say where the probe is, at once: a silent log is indistinguishable from a hung process."""
+    print(f"[probe] {stage}", flush=True)
+
+
 def main() -> None:
+    mark("приложение запущено, создаётся контекст симуляции")
     sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=0.01))
     drive = sim_utils.UrdfConverterCfg.JointDriveCfg(
         gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=None, damping=None)
@@ -49,6 +56,7 @@ def main() -> None:
         merge_fixed_joints=args.merge_fixed_joints == "yes",
         joint_drive=drive,
     )
+    mark(f"конвертация URDF в USD и артикуляция, merge_fixed_joints={args.merge_fixed_joints}")
     robot = Articulation(
         ArticulationCfg(
             prim_path="/World/Robot",
@@ -58,7 +66,9 @@ def main() -> None:
             },
         )
     )
+    mark("сброс симуляции: PhysX строит артикуляцию")
     sim.reset()
+    mark("артикуляция готова, факты записываются")
     data = robot.data
     facts = {
         "merge_fixed_joints": args.merge_fixed_joints == "yes",
@@ -78,4 +88,5 @@ def main() -> None:
 try:
     main()
 finally:
+    print("[probe] закрытие Kit", flush=True)
     simulation_app.close()

@@ -146,10 +146,12 @@ version_of() {  # version_of <python> <distribution>
 }
 
 # Isaac Lab's launcher from its checkout, as scripts/phase0.sh verify runs it. Arguments are
-# quoted once here, so paths with spaces survive the extra shell.
+# quoted once here, so paths with spaces survive the extra shell. Python output unbuffered: into
+# a file it is written in blocks, and probe run 2 showed only Kit's own lines for minutes -- a
+# silence the probe made, not the child.
 isaac_command() {  # isaac_command <script> <args...>
     local script="$1"; shift
-    printf "cd %q && source %q && OMNI_KIT_ACCEPT_EULA=YES ./isaaclab.sh -p %q" \
+    printf "cd %q && source %q && OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 ./isaaclab.sh -p %q" \
         "$ISAACLAB_DIR" "$TRAIN_VENV/bin/activate" "$script"
     printf ' %q' "$@"
 }
