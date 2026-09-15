@@ -274,7 +274,7 @@ step_env() {
     else
         # uv sync removes what pyproject.toml does not list -- the robot package among it.
         info "окружение исполнения: uv sync, затем пакет G1"
-        if clean "cd '$REPO_ROOT' && uv sync --extra dev && uv pip install --python '$EXEC_PY' -e '$PACKAGE'"; then
+        if clean "cd '$REPO_ROOT' && uv sync --extra dev --extra ros2 && uv pip install --python '$EXEC_PY' -e '$PACKAGE'"; then
             info "бэкенды: $(entry_names "$EXEC_PY" sim_backends); двойники: $(entry_names "$EXEC_PY" twins)"
             [[ $(entry_names "$EXEC_PY" twins) == *unitree_g1_gazebo* ]] ||
                 { record env отказ "в окружении исполнения нет двойника unitree_g1_gazebo"; ok=0; }

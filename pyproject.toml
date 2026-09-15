@@ -22,6 +22,9 @@ sim = ["mujoco>=3.1"]
 onnx = ["onnxruntime>=1.18"]
 # A run on disk (ADR-0038). Not vendor code, and still optional: the core runs without it.
 record = ["mcap>=1.1"]
+# What ROS 2's Python messages import and a venv does not get from ROS 2 itself; ROS 2 comes
+# from apt. Held together with ros2.names.ADAPTER_PYTHON_PACKAGES by a test.
+ros2 = ["numpy"]
 dev = [
     "mcap>=1.1",
     "pytest>=8.0",

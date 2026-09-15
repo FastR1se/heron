@@ -40,19 +40,31 @@ from ..ros2 import names
 from ..ros2.transport import Publication, RclpyTransport, Reading, Transport
 from .common import outside_bounds
 
-REQUIREMENTS: Final[tuple[Requirement, ...]] = tuple(
-    needs(
-        RequirementKind.PYTHON,
-        module,
-        hint=f"пакет ros-<дистрибутив>-{package} (ставит scripts/phase0.sh) и подключённое "
-        f"окружение: source /opt/ros/<дистрибутив>/setup.bash",
-    )
-    for module, package in names.ADAPTER_PACKAGES.items()
+REQUIREMENTS: Final[tuple[Requirement, ...]] = (
+    *(
+        needs(
+            RequirementKind.PYTHON,
+            module,
+            hint=f"пакет ros-<дистрибутив>-{package} (ставит scripts/phase0.sh) и подключённое "
+            f"окружение: source /opt/ros/<дистрибутив>/setup.bash",
+        )
+        for module, package in names.ADAPTER_PACKAGES.items()
+    ),
+    *(
+        needs(
+            RequirementKind.PYTHON,
+            module,
+            because="модули сообщений ROS 2 импортируют его при загрузке типа",
+            hint="группа ros2 платформы: uv sync --extra ros2",
+        )
+        for module in names.ADAPTER_PYTHON_PACKAGES
+    ),
 )
 """What the process driving a robot through ROS 2 has to find (ADR-0025).
 
-Derived from ``ADAPTER_PACKAGES``, the list the transport's imports are held to,
-rather than written a second time: the requirement and the import cannot drift."""
+Derived from ``ADAPTER_PACKAGES``, the list the transport's imports are held to, and
+``ADAPTER_PYTHON_PACKAGES``, what those imports import in turn, rather than written a
+second time: the requirement and the import cannot drift."""
 
 NAMESPACE_PARAM: Final = "namespace"
 """Configuration key naming the robot's namespace.

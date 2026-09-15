@@ -231,7 +231,7 @@ step_env() {
         # uv sync removes what pyproject.toml does not list -- the robot package among it,
         # so the package goes in after every sync.
         info "окружение исполнения: uv sync, затем пакет G1"
-        if clean "cd '$REPO_ROOT' && uv sync --extra dev && uv pip install --python '$EXEC_PY' -e '$PACKAGE'"; then
+        if clean "cd '$REPO_ROOT' && uv sync --extra dev --extra ros2 && uv pip install --python '$EXEC_PY' -e '$PACKAGE'"; then
             info "бэкенды: $(entry_names "$EXEC_PY" sim_backends); двойники: $(entry_names "$EXEC_PY" twins)"
             [[ $(entry_names "$EXEC_PY" twins) == *unitree_g1_mujoco* && $(entry_names "$EXEC_PY" sim_backends) == *mujoco* ]] ||
                 { record env отказ "в окружении исполнения нет бэкенда mujoco или двойника unitree_g1_mujoco"; ok=0; }

@@ -176,6 +176,32 @@ class RefusingAdapter(DummyAdapter):
         raise RuntimeError("окружение не подключено")
 
 
+class UnsourcedAdapter(DummyAdapter):
+    """A link whose library fails to import something on first use, inside connect."""
+
+    def connect(self, profile: object, config: dict[str, object]) -> None:
+        raise ModuleNotFoundError("No module named 'numpy'")
+
+
+def test_an_import_failing_inside_connect_is_reported_not_unwound(tmp_path: Path) -> None:
+    """The complex scene on Linux: rclpy loaded, a message module did not, and run
+    came out as a traceback."""
+    profile = make_profile(
+        name="arm",
+        description=ModelDescription(urdf="urdf/arm.urdf"),
+        adapters={"sim.dummy": AdapterSpec(plugin="test_cli_run:UnsourcedAdapter")},
+    )
+    write_urdf(tmp_path, "arm", JOINTS)
+    write_profile(tmp_path, profile)
+
+    result = run(scenario(tmp_path), tmp_path)
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "связь 'sim.dummy' не установлена" in result.output
+    assert "No module named 'numpy'" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
 class NarrowAdapter(DummyAdapter):
     """A link guarding an envelope of ±1, narrower than the profile's ±2.
 

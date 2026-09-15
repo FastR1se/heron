@@ -26,7 +26,8 @@
 #
 # Prerequisites: those of scripts/phase4-stage4.sh (the twin built by phase4-stage1.sh twin,
 # venv-own-lib by phase4-probe.sh 0.5) and scripts/phase4-stage5.sh env (unitree_hg and the
-# bridge built into $HOME/phase4-stage5/ws). A graphical session. ffmpeg for media.
+# bridge built into $HOME/phase4-stage5/ws). A graphical session. ffmpeg for media
+# (sudo apt install ffmpeg).
 #
 # Writes outside $STAGE_ROOT: `uv sync` and `uv pip install` in the execution venv; `pip
 # install` into venv-own-lib; the vendor descriptions (gitignored); media -> docs/media.
@@ -212,7 +213,7 @@ screen_start() {  # screen_start <mp4> <seconds>
     size="$(xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')"
     [[ -n $size ]] || size="$(xrandr 2>/dev/null | awk '/\*/ {print $1; exit}')"
     if ! command -v ffmpeg >/dev/null || [[ -z $size || -z ${DISPLAY:-} ]]; then
-        record "media запись" невозможна "ffmpeg $(command -v ffmpeg >/dev/null && echo есть || echo нет), размер экрана ${size:-не прочитан}, DISPLAY ${DISPLAY:-нет}, сессия ${XDG_SESSION_TYPE:-?}"
+        record "media запись" невозможна "ffmpeg $(command -v ffmpeg >/dev/null && echo есть || echo нет), размер экрана ${size:-не прочитан}, DISPLAY ${DISPLAY:-нет}, сессия ${XDG_SESSION_TYPE:-?}; ffmpeg ставится: sudo apt install ffmpeg"
         return
     fi
     [[ ${XDG_SESSION_TYPE:-} == wayland ]] && info "сессия Wayland: x11grab снимает только окна XWayland"
@@ -331,15 +332,15 @@ step_env() {
         record env отказ "нет окружения исполнения $EXEC_VENV (scripts/phase0.sh install exec)"; ok=0
     else
         # uv sync removes what pyproject.toml does not list -- the robot package among it.
-        info "окружение исполнения: uv sync --extra dev (с mcap), затем пакет G1"
-        clean "cd '$REPO_ROOT' && uv sync --extra dev && uv pip install --python '$EXEC_PY' -e '$PACKAGE'" ||
+        info "окружение исполнения: uv sync --extra dev --extra ros2 (mcap, numpy), затем пакет G1"
+        clean "cd '$REPO_ROOT' && uv sync --extra dev --extra ros2 && uv pip install --python '$EXEC_PY' -e '$PACKAGE'" ||
             { record env отказ "uv sync или установка пакета G1 не прошли — причина выше"; ok=0; }
     fi
     if [[ ! -x $OWN_PY ]] || ! "$OWN_PY" -c 'import unitree_sdk2py.core.channel' >/dev/null 2>&1; then
         record env отказ "нет $VENV_OWN с SDK: bash scripts/phase4-probe.sh 0.5"; ok=0
     else
         info "окружение адаптера: зависимости платформы и mcap, затем платформа и пакет G1 без зависимостей"
-        clean "'$OWN_PY' -m pip install -q --no-cache-dir pydantic pyyaml typer packaging mcap && '$OWN_PY' -m pip install -q --no-cache-dir --no-deps -e '$REPO_ROOT' -e '$PACKAGE'" ||
+        clean "'$OWN_PY' -m pip install -q --no-cache-dir --timeout 120 --retries 5 pydantic pyyaml typer packaging mcap &&'$OWN_PY' -m pip install -q --no-cache-dir --no-deps -e '$REPO_ROOT' -e '$PACKAGE'" ||
             { record env отказ "установка в $VENV_OWN не прошла — причина выше"; ok=0; }
     fi
     clean "cd '$REPO_ROOT' && '$EXEC_PY' examples/robots/g1_23dof/fetch_description.py" > /dev/null ||
@@ -347,7 +348,7 @@ step_env() {
 
     {
         printf '| Что | Значение |\n|---|---|\n'
-        row "машина" "$(lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | head -1), потоков $(nproc), ОЗУ $(awk '/MemTotal/ {printf "%.1f ГБ", $2 / 1048576}' /proc/meminfo)"
+        row "машина" "$(LC_ALL=C lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | head -1), потоков $(nproc), ОЗУ $(LC_ALL=C awk '/MemTotal/ {printf "%.1f ГБ", $2 / 1048576}' /proc/meminfo)"
         row "GPU" "$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 | grep . || echo 'не прочитан')"
         row "ОС" "$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-?}"), ядро $(uname -r), сессия ${XDG_SESSION_TYPE:-?}"
         row "платформа" "$(commit_of "$REPO_ROOT"), изменённых файлов $(git -C "$REPO_ROOT" status --short 2>/dev/null | wc -l)"
@@ -378,6 +379,10 @@ step_trials() {  # step_trials <mujoco|gazebo>
     local n
     if [[ $1 == mujoco || $GUI == 1 ]] && [[ -z ${DISPLAY:-} ]]; then
         record "$1" пропущено "DISPLAY не задан"; return
+    fi
+    # Without mcap run refuses before connecting (ADR-0038): no world is started for a refusal.
+    if ! "$OWN_PY" -c 'import mcap' >/dev/null 2>&1; then
+        record "$1" пропущено "в $VENV_OWN нет mcap — run откажет в записи до подключения; повторите шаг env"; return
     fi
     for (( n = 1; n <= TRIALS; n++ )); do trial "$1" "$1-$n" "$GUI" ""; done
 }

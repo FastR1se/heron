@@ -115,6 +115,15 @@ import that fails at run time is an environment nobody declared. The set is
 checked from both sides by a test -- nothing outside it may be imported by the
 transport, and everything in it must be installed by the phase 0 script."""
 
+ADAPTER_PYTHON_PACKAGES: Final[tuple[str, ...]] = ("numpy",)
+"""Python packages the generated ROS 2 message modules import when a type loads,
+which a ROS 2 installation does not put on the path of a virtual environment.
+
+``sensor_msgs.msg`` imports ``numpy``. The execution environment used to have it only
+as a dependency of MuJoCo's group, and a sync without that group removed it: the link
+failed at connect, after every check had passed. The optional group ``ros2`` installs
+these, and a test holds that group and this tuple together."""
+
 
 # -- derivations -----------------------------------------------------------
 

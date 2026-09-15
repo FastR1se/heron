@@ -336,11 +336,12 @@ def execute(
     adapter = build_adapter(profile, chosen)
     try:
         adapter.connect(profile, adapter_config(profile, robot, chosen))
-    except RuntimeError as exc:
+    except (RuntimeError, ImportError) as exc:
         # A link that cannot be established is a setup failure by definition,
         # and this command reports setup failures instead of unwinding: the
         # commonest one is an environment that was never sourced, and a
-        # traceback is the wrong way to say so.
+        # traceback is the wrong way to say so. An import that fails inside a
+        # vendor's library on first use is the same failure arriving late.
         raise RunError(
             f"{robot.id}: связь {chosen!r} не установлена — {exc}"
         ) from exc

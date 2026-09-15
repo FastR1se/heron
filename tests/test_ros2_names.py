@@ -151,6 +151,23 @@ def test_every_package_the_transport_imports_is_installed_by_phase_zero() -> Non
     assert not missing, f"фаза 0 не ставит: {missing}"
 
 
+def test_what_ros2_messages_import_is_a_group_of_the_platform_and_a_requirement() -> None:
+    """``sensor_msgs.msg`` imports numpy, and a venv does not get it from ROS 2. Declared
+    only as a dependency of another group, a sync without that group removed it and the
+    link failed at connect in the complex scene."""
+    import tomllib
+
+    from heron.adapters.ros2_control import REQUIREMENTS
+
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    group = {
+        re.split(r"[<>=!~\[ ;]", item)[0]
+        for item in data["project"]["optional-dependencies"]["ros2"]
+    }
+    assert group == set(names.ADAPTER_PYTHON_PACKAGES)
+    assert set(names.ADAPTER_PYTHON_PACKAGES) <= {item.name for item in REQUIREMENTS}
+
+
 def test_transport_imports_nothing_it_did_not_declare() -> None:
     """The other side: a ROS 2 import that was never declared is an undeclared
     environment, which is exactly how phase 2 lost a scene."""

@@ -16,8 +16,9 @@
 #          --dry-run of both robots names the world's environment, and a process in another
 #          domain is refused
 #   scene  sim run; controllers of both robots active; CycloneDDS in every process of the
-#          world; run G1, then run arm1, each with a record; both moved, and G1 held still
-#          while the arm ran; the platform stops the world
+#          world; run G1, then run arm1, each with a record; both moved, and a DDS witness
+#          saw G1's commands during its run and none during the arm's; the platform stops
+#          the world
 #
 # Usage:
 #   bash scripts/phase4-stage7.sh                    # all steps
@@ -197,24 +198,46 @@ print(f"свидетель манипулятора: {topic} " + ", ".join(f"{va
 PY
 
     cat > "$PY_DIR/moved.py" <<'PY'
-# Whether the joints went toward the target: before.json after.json '<target as JSON>' <limit rad>.
-import json, sys
+# Whether the joints went toward the target: before.json after.json '<target as JSON>' <RMS limit rad>.
+# Judged by the RMS over joints, the worst joint printed: the worst joint of a fallen robot is an
+# arm pressed to the floor (stages 5 and 7), and this stage asks whether commands arrived.
+import json, math, sys
 before, after = (json.load(open(path, encoding="utf-8"))["q_mean"] for path in sys.argv[1:3])
 target, limit = json.loads(sys.argv[3]), float(sys.argv[4])
 was = [abs(q - t) for q, t in zip(before, target)]
 now = [abs(q - t) for q, t in zip(after, target)]
+rms = lambda gaps: math.sqrt(sum(g * g for g in gaps) / len(gaps))
 worst = max(range(len(now)), key=now.__getitem__)
-print(f"до цели было {max(was):.3f} рад, стало {now[worst]:.3f} (сустав {worst})")
-sys.exit(0 if now[worst] <= limit and now[worst] <= 0.5 * max(was) else 1)
+print(f"до цели RMS {rms(was):.3f} -> {rms(now):.3f} рад; худший сустав {worst}: {was[worst]:.3f} -> {now[worst]:.3f}")
+sys.exit(0 if rms(now) <= limit and rms(now) <= 0.5 * rms(was) else 1)
 PY
 
-    cat > "$PY_DIR/still.py" <<'PY'
-# Whether a robot held still between two windows: a.json b.json <limit rad>.
-import json, sys
-a, b = (json.load(open(path, encoding="utf-8"))["q_mean"] for path in sys.argv[1:3])
-drift = max(abs(x - y) for x, y in zip(a, b))
-print(f"наибольший сдвиг сустава {drift:.4f} рад")
-sys.exit(0 if drift <= float(sys.argv[3]) else 1)
+    cat > "$PY_DIR/lowcmd.py" <<'PY'
+# LowCmd on G1's topic from a DDS participant of its own, until <stop file> appears (at most
+# <limit> s). Counted during G1's run -- the witness can see commands -- and during the arm's.
+import os, sys, time
+import yaml
+from cyclonedds.domain import Domain, DomainParticipant
+from cyclonedds.qos import Policy, Qos
+from cyclonedds.sub import DataReader
+from cyclonedds.topic import Topic
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
+from unitree_g1.channel import COMMAND_TOPIC, LinkConfig
+
+profile_path, stop, limit = sys.argv[1], sys.argv[2], float(sys.argv[3])
+profile = yaml.safe_load(open(profile_path, encoding="utf-8"))
+link = LinkConfig.from_params(profile["adapters"]["sim.gazebo"]["params"])
+domain = Domain(link.domain, link.cyclonedds_xml())
+participant = DomainParticipant(link.domain)
+qos = Qos(Policy.History.KeepLast(4096), Policy.Reliability.BestEffort)
+reader = DataReader(participant, Topic(participant, COMMAND_TOPIC, LowCmd_), qos=qos)
+start, count = time.monotonic(), 0
+while True:
+    count += sum(1 for sample in reader.take(N=4096) if hasattr(sample, "motor_cmd"))
+    if os.path.exists(stop) or time.monotonic() - start >= limit:
+        break
+    time.sleep(0.01)
+print(f"свидетель LowCmd: команд {count} за {time.monotonic() - start:.1f} с")
 PY
 
     cat > "$PY_DIR/scene_env.py" <<'PY'
@@ -238,8 +261,11 @@ step_env() {
     [[ -f $ROS_SETUP ]] || { record env отказ "нет $ROS_SETUP"; ok=0; }
     [[ -f $WS/install/setup.bash ]] || { record env отказ "нет $WS: bash scripts/phase4-stage5.sh env"; ok=0; }
     if [[ -x $EXEC_PY ]]; then
-        clean "cd '$REPO_ROOT' && uv sync --extra dev && uv pip install --python '$EXEC_PY' -e '$PACKAGE'" ||
+        clean "cd '$REPO_ROOT' && uv sync --extra dev --extra ros2 && uv pip install --python '$EXEC_PY' -e '$PACKAGE'" ||
             { record env отказ "uv sync или установка пакета G1 не прошли"; ok=0; }
+        # What the arm's adapter needs, found the way env check finds it (ADR-0025).
+        clean "$ROS_ENV && '$EXEC_PY' -c 'import numpy, sensor_msgs.msg'" > "$STAGE_ROOT/env-ros2.txt" 2>&1 ||
+            { record env отказ "окружение исполнения не загружает сообщения ROS 2: $(tail -1 "$STAGE_ROOT/env-ros2.txt")"; ok=0; }
     else
         record env отказ "нет $EXEC_VENV"; ok=0
     fi
@@ -365,26 +391,38 @@ step_scene() {
             start_group "$dir/screen.log" "exec ffmpeg -y -loglevel error -f x11grab -video_size '$size' -framerate 15 -i '$DISPLAY' -t 40 -pix_fmt yuv420p '$dir/screen.mp4'"
             rec_pid=$LAST_GROUP
         else
-            record "media запись" невозможна "ffmpeg $(command -v ffmpeg >/dev/null && echo есть || echo нет), размер ${size:-?}, DISPLAY ${DISPLAY:-нет}"
+            record "media запись" невозможна "ffmpeg $(command -v ffmpeg >/dev/null && echo есть || echo нет), размер ${size:-?}, DISPLAY ${DISPLAY:-нет}; ffmpeg ставится: sudo apt install ffmpeg"
         fi
     fi
 
     # G1 first, from the adapter's venv; no scene environment here -- run applies it.
+    start_group "$dir/lowcmd-g1.txt" "cd '$REPO_ROOT' && exec '$OWN_PY' '$PY_DIR/lowcmd.py' '$G1_PROFILE' '$dir/stop-g1' 150"
+    local counter=$LAST_GROUP
+    sleep 3
     clean "cd '$REPO_ROOT' && timeout 120 '$OWN_CLI' run '$SCENARIO' -R '$REGISTRY' --robot g1 --skill move_joints -g 'target=$G1_TARGET' -g duration=$DURATION --record '$dir/g1.mcap'" > "$dir/run-g1.txt" 2>&1
     code=$?
+    touch "$dir/stop-g1"
     cat "$dir/run-g1.txt"
     (( code == 0 )) && record "scene навык G1" ok "$(grep -m1 '^выполнено' "$dir/run-g1.txt")" ||
         record "scene навык G1" "отказ, код $code" "$(grep -E '^(отказ|причина|g1:)' "$dir/run-g1.txt" | tr '\n' ' ' | grep . || tail -1 "$dir/run-g1.txt")"
     clean "cd '$REPO_ROOT' && timeout 60 '$OWN_PY' '$PY_DIR/window.py' '$G1_PROFILE' 30 1 '$dir/g1-after.json'" > "$dir/g1-after.txt" 2>&1
-    if "$OWN_PY" "$PY_DIR/moved.py" "$dir/g1-before.json" "$dir/g1-after.json" "$G1_TARGET" 1.5 > "$dir/g1-moved.txt" 2>&1; then
+    if "$OWN_PY" "$PY_DIR/moved.py" "$dir/g1-before.json" "$dir/g1-after.json" "$G1_TARGET" 1.0 > "$dir/g1-moved.txt" 2>&1; then
         record "scene движение G1" ok "$(tail -1 "$dir/g1-moved.txt")"
     else
         record "scene движение G1" отказ "$(tail -1 "$dir/g1-moved.txt")"
     fi
 
+    waited=0
+    while running "$counter" && (( waited < 20 )); do sleep 1; waited=$(( waited + 1 )); done
+    cat "$dir/lowcmd-g1.txt"
+
     # Then the arm, from the execution venv with ROS 2 sourced and nothing else (ADR-0039).
+    start_group "$dir/lowcmd-arm1.txt" "cd '$REPO_ROOT' && exec '$OWN_PY' '$PY_DIR/lowcmd.py' '$G1_PROFILE' '$dir/stop-arm1' 150"
+    counter=$LAST_GROUP
+    sleep 3
     clean "$ROS_ENV && cd '$REPO_ROOT' && timeout 120 '$EXEC_CLI' run '$SCENARIO' -R '$REGISTRY' --robot arm1 --skill move_joints -g 'target=$ARM_TARGET' -g duration=$DURATION --record '$dir/arm1.mcap'" > "$dir/run-arm1.txt" 2>&1
     code=$?
+    touch "$dir/stop-arm1"
     cat "$dir/run-arm1.txt"
     (( code == 0 )) && record "scene навык arm1" ok "$(grep -m1 '^выполнено' "$dir/run-arm1.txt")" ||
         record "scene навык arm1" "отказ, код $code" "$(grep -E '^(отказ|причина|arm1:)' "$dir/run-arm1.txt" | tr '\n' ' ' | grep . || tail -3 "$dir/run-arm1.txt" | tr '\n' ' ')"
@@ -398,11 +436,16 @@ step_scene() {
         record "scene движение arm1" отказ "$(tail -1 "$dir/arm-moved.txt" 2>/dev/null || tail -1 "$dir/arm-after.txt")"
     fi
 
-    clean "cd '$REPO_ROOT' && timeout 60 '$OWN_PY' '$PY_DIR/window.py' '$G1_PROFILE' 30 1 '$dir/g1-after-arm.json'" > "$dir/g1-after-arm.txt" 2>&1
-    if "$OWN_PY" "$PY_DIR/still.py" "$dir/g1-after.json" "$dir/g1-after-arm.json" 0.05 > "$dir/g1-still.txt" 2>&1; then
-        record "scene G1 во время arm1" ok "$(tail -1 "$dir/g1-still.txt") — команды манипулятора до G1 не дошли"
+    waited=0
+    while running "$counter" && (( waited < 20 )); do sleep 1; waited=$(( waited + 1 )); done
+    cat "$dir/lowcmd-arm1.txt"
+    local during_g1 during_arm
+    during_g1="$(grep -oP 'команд \K[0-9]+' "$dir/lowcmd-g1.txt")"
+    during_arm="$(grep -oP 'команд \K[0-9]+' "$dir/lowcmd-arm1.txt")"
+    if [[ -n $during_g1 && -n $during_arm ]] && (( during_g1 > 0 && during_arm == 0 )); then
+        record "scene связи не пересекаются" ok "LowCmd на топике G1: $during_g1 во время run G1, 0 во время run arm1"
     else
-        record "scene G1 во время arm1" отказ "$(tail -1 "$dir/g1-still.txt")"
+        record "scene связи не пересекаются" отказ "LowCmd во время run G1: ${during_g1:-не прочитано}, во время run arm1: ${during_arm:-не прочитано}"
     fi
 
     local robot

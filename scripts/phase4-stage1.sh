@@ -535,7 +535,7 @@ step_env() {
         before="$(twins_group)"
         info "группа двойников в окружении исполнения до синхронизации: $before"
         info "окружение исполнения синхронизируется с pyproject.toml этого коммита (uv sync, группы sim dev)"
-        if clean "cd '$REPO_ROOT' && uv sync --extra sim --extra dev"; then
+        if clean "cd '$REPO_ROOT' && uv sync --extra sim --extra dev --extra ros2"; then
             after="$(twins_group)"
             info "после: $after"
             if [[ $after == пусто ]]; then

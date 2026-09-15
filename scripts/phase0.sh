@@ -33,7 +33,7 @@ readonly ISAACLAB_REF="v2.3.0"
 readonly TORCH_SPEC="torch==2.7.0 torchvision==0.22.0"
 readonly TORCH_INDEX="https://download.pytorch.org/whl/cu128"
 readonly FLATDICT_SPEC="flatdict==4.0.1"       # version Isaac Lab pins; see ensure_flatdict
-readonly EXEC_EXTRAS="sim dev"                 # optional groups in pyproject.toml: MuJoCo, tests
+readonly EXEC_EXTRAS="sim dev ros2"            # optional groups in pyproject.toml: MuJoCo, tests, what ROS 2 messages import
 
 readonly INSTALL_STEPS="base ros2 gazebo exec isaac docker"
 readonly VERIFY_ENVS="ros2 gazebo mujoco isaac"
