@@ -455,6 +455,16 @@ step_scene() {
         record "scene движение" отказ "$(tail -1 "$dir/moved.txt")"
     fi
 
+    # Which processes of the world can hear SIGINT at all: bit 2 of SigIgn. A background
+    # job of this script starts with SIGINT ignored, and ros2 launch listens only through
+    # Python's handlers (ADR-0036).
+    local p mask
+    for p in $(pgrep -g "$pgid"); do
+        mask="$(sed -n 's/^SigIgn:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null)"
+        [[ -n $mask ]] || continue
+        info "$(cat "/proc/$p/comm" 2>/dev/null)[$p] SigIgn $mask — SIGINT $( (( 0x$mask & 2 )) && echo игнорируется || echo доходит)"
+    done
+
     # SIGTERM to sim run alone, not to the group: the platform's stop is under test
     # (ADR-0032 fixed it; stage 4 could not check it with SIGINT from a background job).
     kill -TERM "$pgid" 2>/dev/null

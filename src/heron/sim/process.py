@@ -96,6 +96,18 @@ class SubprocessProcess:
         return self.handle.wait(timeout=timeout)
 
 
+def _default_sigint() -> None:  # pragma: no cover - runs in the child, before exec
+    """SIGINT back to its default action in a child about to run (ADR-0036).
+
+    An ignored signal survives exec, and a process started from a script's
+    background job inherits SIGINT ignored. CPython then installs no handler of
+    its own, ``ros2 launch`` -- which listens only through Python's handlers --
+    never hears the interrupt it would stop its children on, and a stop becomes a
+    kill. A launcher that promises to interrupt makes the interrupt deliverable.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
 @dataclass(slots=True)
 class SubprocessLauncher:
     """Starts processes for real, and remembers what it started.
@@ -117,6 +129,7 @@ class SubprocessLauncher:
             list(command),
             cwd=str(cwd) if cwd is not None else None,
             env=dict(env) if env is not None else None,
+            preexec_fn=None if os.name == "nt" else _default_sigint,
         )
         process = SubprocessProcess(command=tuple(command), handle=handle)
         self.processes.append(process)

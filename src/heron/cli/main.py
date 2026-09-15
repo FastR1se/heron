@@ -275,7 +275,7 @@ def sim_run(
     # Whatever ends this command -- the world exiting, Ctrl+C, SIGTERM, a refusal
     # halfway through starting -- the processes it started end with it: a twin is
     # a process of its own, and one left behind holds a window and a DDS domain.
-    with _terminate_as_interrupt():
+    with _stop_signals_as_interrupt():
         try:
             try:
                 backend.build_world(scenario)
@@ -307,22 +307,28 @@ def sim_run(
 
 
 @contextmanager
-def _terminate_as_interrupt() -> Iterator[None]:
-    """SIGTERM stops a world the way Ctrl+C does.
+def _stop_signals_as_interrupt() -> Iterator[None]:
+    """SIGINT and SIGTERM stop a world the same way, however this command was started.
 
-    Only Ctrl+C used to: a ``kill``, a service manager or a container runtime
-    ended this process and left the simulator it started running. The handler is
-    restored afterwards, so a caller's own is not lost.
+    Only Ctrl+C at a terminal used to: a ``kill``, a service manager or a container
+    runtime ended this process and left the simulator it started running. SIGINT
+    is installed explicitly too: started from a script's background job, a process
+    inherits it ignored, CPython then leaves it ignored, and ``kill -INT`` reached
+    nothing (ADR-0036). The handlers are restored afterwards, so a caller's own are
+    not lost.
     """
 
     def interrupt(signum: int, frame: FrameType | None) -> None:
         raise KeyboardInterrupt
 
-    previous = signal.signal(signal.SIGTERM, interrupt)
+    previous = {
+        signum: signal.signal(signum, interrupt) for signum in (signal.SIGINT, signal.SIGTERM)
+    }
     try:
         yield
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 # -- env -------------------------------------------------------------------
