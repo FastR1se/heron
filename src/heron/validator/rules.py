@@ -33,6 +33,7 @@ from .description import check_description
 from .mjcf import check_mjcf, check_mujoco_world
 from .policy import check_policy_against_profile
 from .report import Report, error, warning
+from .train import check_training, is_training_world
 
 # --------------------------------------------------------------------------
 # One profile on its own.
@@ -223,18 +224,15 @@ def _check_action_envelope(profile: RobotProfile, report: Report) -> None:
 
     clip_low, clip_high = action.clip
     outside_set: dict[str, dict[str, list[float]]] = {}
-    for name, origin, scale, low, high in zip(
+    for name, reach, low, high in zip(
         contract.joint_order,
-        contract.origin(),
-        contract.action_scale(),
+        contract.action_targets() or (),
         bounds.min,
         bounds.max,
         strict=True,
     ):
-        ends = (origin + clip_low * scale, origin + clip_high * scale)
-        reach = [min(ends), max(ends)]
         if reach[0] < low or reach[1] > high:
-            outside_set[name] = {"targets": reach, "limits": [low, high]}
+            outside_set[name] = {"targets": list(reach), "limits": [low, high]}
     if outside_set:
         report.add(
             error(
@@ -419,6 +417,9 @@ def check_scenario(
     report = Report()
     where = f"scenario:{scenario.name}"
     required_target = sim_target(scenario.world.backend)
+    # A world that trains has no adapter to require and no twin to find: nobody
+    # drives the learner, the algorithm does (ADR-0044).
+    training = is_training_world(scenario)
     # Two robots may share a profile; its own findings are reported once.
     checked: set[str] = set()
     participants: list[tuple[ScenarioRobot, RobotProfile]] = []
@@ -444,7 +445,7 @@ def check_scenario(
 
         participants.append((robot, profile))
         located.append((robot, profile, source.path))
-        if required_target not in profile.adapters:
+        if not training and required_target not in profile.adapters:
             report.add(
                 error(
                     "scenario.backend_adapter_missing",
@@ -465,8 +466,11 @@ def check_scenario(
             report.extend(check_profile(profile, path=source.path, store=store).findings)
 
     _check_task_skill(scenario, participants, report)
-    _check_twins(scenario, participants, report)
-    report.extend(check_mujoco_world(scenario, located, path).findings)
+    if training:
+        check_training(scenario, participants, report)
+    else:
+        _check_twins(scenario, participants, report)
+        report.extend(check_mujoco_world(scenario, located, path).findings)
 
     learners = scenario.learners
     if len(learners) > 1:

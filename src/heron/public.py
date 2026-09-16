@@ -27,8 +27,11 @@ PUBLIC_MODULES: Final = frozenset(
         "core.types",
         "core.units",
         "core.urdf",
-        # The five extension points.
+        # The six extension points.
         "core.protocols",
+        # What a training task contributes to the environment of its backend, and
+        # the values it returns (ADR-0044).
+        "train.isaaclab_task",
         # What a twin in a Gazebo world contributes, and the values it returns.
         "generators.common",
         "generators.twin",

@@ -37,11 +37,14 @@ from ..sim.process import PlanningLauncher, SubprocessLauncher
 from ..skills.learned import PolicyRuntimeError, check_network
 from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..store.policies import ArtifactNotFoundError, PolicyArtifact, PolicyStore
-from ..validator.environment import check_environment
+from ..train.isaaclab import RunConditions, TrainError, read_run
+from ..train.tasks import installed_tasks
+from ..validator.environment import LocalMachine, check_environment, check_requirements
 from ..validator.policy import check_policy_against_profile
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
 from .new_robot import write_stub
+from .new_task import write_stub as write_task_stub
 from .run import RunError, describe, execute
 
 EXIT_OK = 0
@@ -63,11 +66,18 @@ policy_app = typer.Typer(
 env_app = typer.Typer(
     help="Окружение машины: что нужно сторонам связи (ADR-0025).", no_args_is_help=True
 )
+train_app = typer.Typer(
+    help="Обучение: среда из профиля и сценария, прогон, артефакт (ADR-0044).",
+    no_args_is_help=True,
+)
+task_app = typer.Typer(help="Задачи обучения: шестая точка расширения.", no_args_is_help=True)
 app.add_typer(profile_app, name="profile")
 app.add_typer(contract_app, name="contract")
 app.add_typer(skill_app, name="skill")
 app.add_typer(policy_app, name="policy")
 app.add_typer(sim_app, name="sim")
+app.add_typer(train_app, name="train")
+app.add_typer(task_app, name="task")
 app.add_typer(env_app, name="env")
 
 RootsOption = Annotated[
@@ -341,6 +351,203 @@ def _stop_signals_as_interrupt() -> Iterator[None]:
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
+
+
+# -- train -----------------------------------------------------------------
+
+
+@train_app.command("run")
+def train_run(
+    scenario_file: Annotated[Path, typer.Argument(help="Файл сценария обучения.")],
+    into: Annotated[
+        Path | None,
+        typer.Option("--into", help="Каталог прогона; по умолчанию — под данными платформы."),
+    ] = None,
+    learner: Annotated[
+        str | None,
+        typer.Option("--learner", help="Идентификатор ученика, если их в сцене несколько."),
+    ] = None,
+    envs: Annotated[int, typer.Option("--envs", help="Параллельных сред.")] = 512,
+    iterations: Annotated[int, typer.Option("--iterations", help="Итераций обучения.")] = 1000,
+    seed: Annotated[int, typer.Option("--seed", help="Зерно ГСЧ.")] = 1,
+    device: Annotated[str, typer.Option("--device", help="Устройство обучения.")] = "cuda:0",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Показать выведенную среду и команду, ничего не запуская."),
+    ] = False,
+    export: Annotated[
+        bool,
+        typer.Option("--export/--no-export", help="Сложить артефакт по завершении."),
+    ] = True,
+    roots: RootsOption = None,
+    store: StoreOption = None,
+) -> None:
+    """Обучить политику в среде, выведенной из профиля и сценария (ADR-0044).
+
+    Среда не настраивается, а выводится: частоты, действие, наблюдение и привод
+    задаёт контракт. Что именно выведено, печатает сухой прогон — до того, как
+    начнут тратиться часы GPU.
+    """
+    try:
+        scenario = load_scenario(scenario_file)
+    except LoadError as exc:
+        typer.echo(f"не читается  {exc}", err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+
+    try:
+        factory = load("train", scenario.world.backend)
+    except PluginError as exc:
+        typer.echo(
+            f"обучение не начинается  сцена объявляет владельцем физики "
+            f"{scenario.world.backend!r} — {exc}",
+            err=True,
+        )
+        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+    launcher = PlanningLauncher() if dry_run else SubprocessLauncher()
+    backend = factory(
+        _registry(roots),
+        into=into,
+        launcher=launcher,
+        scenario_path=scenario_file,
+        store=PolicyStore(store),
+    )
+    try:
+        plan = backend.build_env(scenario, learner)
+    except (TrainError, LoadError, ProfileNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+    for line in plan.lines():
+        typer.echo(line)
+    if dry_run:
+        typer.echo(
+            f"\nсухой прогон: ничего не записано и не запущено. Проверка окружения — "
+            f"{APP_NAME} train env {scenario_file}"
+        )
+        raise typer.Exit(EXIT_OK)
+
+    # The machine, before a single file of the run is written (ADR-0025).
+    report = check_requirements(
+        backend.requirements, where=f"train:{scenario.world.backend}", machine=LocalMachine()
+    )
+    if not report.ok:
+        typer.echo("\nобучение не начинается  окружению этой машины не хватает:", err=True)
+        _print(report, err=True)
+        raise typer.Exit(EXIT_FOUND_ERRORS)
+
+    conditions = RunConditions(envs=envs, iterations=iterations, seed=seed, device=device)
+    typer.echo("")
+    with _stop_signals_as_interrupt():
+        try:
+            run = backend.train(plan, conditions)
+        except KeyboardInterrupt:
+            typer.echo("\nостановлено; каталог прогона остаётся как есть")
+            raise typer.Exit(EXIT_FOUND_ERRORS) from None
+        except TrainError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+
+    typer.echo(f"прогон     {run}")
+    if not export:
+        typer.echo(f"артефакт не сложен; сложить — {APP_NAME} train export {run}")
+        raise typer.Exit(EXIT_OK)
+    _export_run(backend, run)
+
+
+@train_app.command("export")
+def train_export(
+    run: Annotated[Path, typer.Argument(help="Каталог прогона.")],
+    roots: RootsOption = None,
+    store: StoreOption = None,
+) -> None:
+    """Сложить артефакт по каталогу прогона (ADR-0046).
+
+    Отдельной командой, потому что прогон и артефакт — разные вещи: прогон можно
+    повторить, потерять или разобрать, артефакт называется своим содержимым.
+    """
+    try:
+        record = read_run(run)
+        factory = load("train", record.spec.backend)
+    except (TrainError, PluginError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+    backend = factory(_registry(roots), store=PolicyStore(store))
+    _export_run(backend, run)
+
+
+def _export_run(backend: Any, run: Path) -> None:
+    try:
+        artifact = backend.export(run)
+    except (TrainError, LoadError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+    typer.echo(f"артефакт   {artifact.ref}")
+    typer.echo(f"каталог    {artifact.directory}")
+    typer.echo(
+        f"\nпривяжите навык в профиле:  skills: [..., {{<навык>: {artifact.ref}}}]\n"
+        f"проверьте:                  {APP_NAME} policy check {artifact.ref} <профиль>"
+    )
+
+
+@train_app.command("env")
+def train_env(
+    scenario_file: Annotated[Path, typer.Argument(help="Файл сценария обучения.")],
+) -> None:
+    """Хватит ли этой машине окружения, чтобы обучать в мире этой сцены (ADR-0025)."""
+    try:
+        scenario = load_scenario(scenario_file)
+        factory = load("train", scenario.world.backend)
+    except (LoadError, PluginError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+    requirements = factory.requirements
+    typer.echo(f"проверено  train:{scenario.world.backend}: требований {len(requirements)}\n")
+    _finish(
+        check_requirements(
+            requirements, where=f"train:{scenario.world.backend}", machine=LocalMachine()
+        )
+    )
+
+
+# -- task ------------------------------------------------------------------
+
+
+@task_app.command("list")
+def task_list() -> None:
+    """Задачи обучения, установленные на этой машине."""
+    tasks = installed_tasks()
+    if not tasks:
+        typer.echo("задач нет; задача ставится пакетом и объявляет точку входа")
+        raise typer.Exit(EXIT_OK)
+    for name, where in sorted(tasks.items()):
+        typer.echo(f"{name}  {where}")
+
+
+@task_app.command("new")
+def task_new(
+    name: Annotated[str, typer.Argument(help="Имя новой задачи обучения.")],
+    into: Annotated[Path, typer.Option("--into", help="Куда положить заготовку.")] = Path("."),
+    backend: Annotated[str, typer.Option("--backend", help="Бэкенд обучения.")] = "isaaclab",
+) -> None:
+    """Создать заготовку пакета задачи обучения (ADR-0044).
+
+    Заготовка — пакет, точка входа и сцена: ни одного файла платформы. Это и есть
+    проверка обещания, что свою задачу ставят, а не вписывают в ядро.
+    """
+    try:
+        created = write_task_stub(name, into, backend=backend)
+    except (ValueError, FileExistsError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+    for path in created:
+        typer.echo(f"создано  {path}")
+    typer.echo(
+        f"\nпоставьте пакет и заполните TODO:\n"
+        f"  pip install -e {created[0].parent}\n"
+        f"  {APP_NAME} task list\n"
+        f"  {APP_NAME} train run {created[-1]} --dry-run"
+    )
 
 
 # -- env -------------------------------------------------------------------

@@ -389,7 +389,9 @@ def scenario_data(**overrides: object) -> dict[str, object]:
         "schema_version": 1,
         "name": "bench",
         "world": {"backend": "dummy"},
-        "robots": [{"id": "arm1", "profile": "test_arm", "role": "learner"}],
+        # scripted, not learner: a learner declares what it is learning (ADR-0044),
+        # and a scene in the dummy world is not a scene anybody learns in.
+        "robots": [{"id": "arm1", "profile": "test_arm", "role": "scripted"}],
     }
     data.update(overrides)
     return data
@@ -426,8 +428,8 @@ def test_two_learners_rejected(registry: Registry) -> None:
     """Joint multi-agent training is deliberately postponed (section 15)."""
     data = scenario_data(
         robots=[
-            {"id": "arm1", "profile": "test_arm", "role": "learner"},
-            {"id": "arm2", "profile": "test_arm", "role": "learner"},
+            {"id": "arm1", "profile": "test_arm", "role": "learner", "task": "reach"},
+            {"id": "arm2", "profile": "test_arm", "role": "learner", "task": "reach"},
         ]
     )
     report = check_scenario(Scenario.model_validate(data), registry)
@@ -437,7 +439,7 @@ def test_two_learners_rejected(registry: Registry) -> None:
 def test_shared_profile_is_reported_once(registry: Registry) -> None:
     data = scenario_data(
         robots=[
-            {"id": "arm1", "profile": "test_arm", "role": "learner"},
+            {"id": "arm1", "profile": "test_arm", "role": "scripted"},
             {"id": "arm2", "profile": "test_arm", "role": "static"},
         ]
     )

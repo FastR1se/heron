@@ -331,6 +331,11 @@ class ScenarioRobot(BaseModel):
     trajectory: str | None = None
     """Artifact id of the recorded trajectory. Required for role ``replay``."""
 
+    task: str | None = None
+    """Plugin name of the training task, as an adapter names its plugin (ADR-0044).
+    Required for role ``learner``: what a learner is learning is not derivable from
+    anything else in the scenario, and the core must not guess it."""
+
     _validate_id = field_validator("id")(_check_name)
     _validate_policy = field_validator("policy")(_check_policy_ref)
 
@@ -340,10 +345,14 @@ class ScenarioRobot(BaseModel):
             raise ValueError(f"{self.id}: роль frozen требует поля policy")
         if self.role is Role.REPLAY and self.trajectory is None:
             raise ValueError(f"{self.id}: роль replay требует поля trajectory (ADR-0003)")
+        if self.role is Role.LEARNER and self.task is None:
+            raise ValueError(f"{self.id}: роль learner требует поля task (ADR-0044)")
         if self.role is not Role.FROZEN and self.policy is not None:
             raise ValueError(f"{self.id}: поле policy имеет смысл только при роли frozen")
         if self.role is not Role.REPLAY and self.trajectory is not None:
             raise ValueError(f"{self.id}: поле trajectory имеет смысл только при роли replay")
+        if self.role is not Role.LEARNER and self.task is not None:
+            raise ValueError(f"{self.id}: поле task имеет смысл только при роли learner")
         return self
 
 

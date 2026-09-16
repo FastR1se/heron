@@ -166,6 +166,41 @@ def test_importing_the_platform_imports_no_ros2() -> None:
     assert "leaked: []" in result.stdout, result.stdout
 
 
+def test_importing_the_platform_imports_no_training_stack() -> None:
+    """Section 10 again, at the place phase 6 makes it easy to break.
+
+    The training backend ships in the core (ADR-0044), so every command imports
+    it. If it pulled in Isaac, torch or the learning library at import time, the
+    platform would stop installing on the machine it is developed on and on every
+    machine that only executes policies. Isaac lives in the training process and
+    nowhere else, and a subprocess is the only honest way to check that.
+    """
+    code = (
+        "import sys; "
+        "import heron.cli.main, heron.train.isaaclab, heron.train.isaaclab_task; "
+        "leaked = sorted(m for m in sys.modules "
+        "if m.split('.')[0] in {'isaaclab', 'isaacsim', 'isaaclab_rl', 'rsl_rl', 'torch'}); "
+        "print('leaked:', leaked)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO_ROOT
+    )
+    assert result.returncode == 0, result.stderr
+    assert "leaked: []" in result.stdout, result.stdout
+
+
+def test_the_core_imports_no_task_of_the_examples() -> None:
+    """A training task is found through an entry point, never imported by path."""
+    pattern = re.compile(r"(arm6_reach|examples)")
+    offenders: list[str] = []
+    for path in python_files(PACKAGE):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith(("import ", "from ")) and pattern.search(stripped):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {stripped}")
+    assert not offenders, "ядро импортирует пример:\n" + "\n".join(offenders)
+
+
 def test_core_has_no_vendor_dependencies() -> None:
     """Section 10: the core installs without a simulator or an SDK."""
     import tomllib

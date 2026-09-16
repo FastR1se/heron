@@ -36,6 +36,7 @@ ENTRY_POINT_GROUPS: Final = {
     "adapters": f"{APP_NAME}.adapters",
     "sim": f"{APP_NAME}.sim_backends",
     "train": f"{APP_NAME}.train_backends",
+    "tasks": f"{APP_NAME}.train_tasks",
     "skills": f"{APP_NAME}.skills",
     "twins": f"{APP_NAME}.twins",
 }

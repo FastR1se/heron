@@ -1,8 +1,9 @@
-"""The five extension points of the platform (ARCHITECTURE.md, section 5).
+"""The six extension points of the platform (ARCHITECTURE.md, section 5).
 
 Everything vendor-specific implements one of these from outside the core. A new
 extension point is a decision, recorded in ``docs/decisions/``, not an edit to
-this file. The fifth -- the twin -- is ADR-0021.
+this file. The fifth -- the twin -- is ADR-0021, the sixth -- the training task --
+is ADR-0044.
 
 They are ``Protocol`` classes rather than base classes on purpose: a vendor
 package must not have to import the platform to satisfy them, and invariant 1
@@ -18,7 +19,7 @@ from typing import Any, Protocol, runtime_checkable
 from .capabilities import Capability
 from .enums import ControlMode, Status, TwinKind
 from .environment import Requirement
-from .models import Limits, RobotProfile, Scenario
+from .models import Completion, Limits, RobotProfile, Scenario, SkillSpec
 from .types import Command, Pose, RobotState
 
 
@@ -164,11 +165,56 @@ class TrainBackend(Protocol):
     """A training environment.
 
     Its only output crossing the boundary is an artifact -- ONNX plus contract
-    (invariant 2). Nothing here returns a live object to the execution side.
+    (invariant 2). Nothing here returns a live object to the execution side, and
+    nothing here is a live object either: a plan is data, a run is a directory,
+    and an artifact is three files (ADR-0044).
     """
 
-    def build_env(self, scenario: Scenario, learner: str) -> Any: ...
+    requirements: Sequence[Requirement]
+    """What the process that trains needs from its environment (ADR-0025)."""
 
-    def train(self, cfg: dict[str, Any]) -> Any: ...
+    def build_env(self, scenario: Scenario, learner: str) -> Any:
+        """Derive the environment from the profile and the scenario. No simulator.
 
-    def export(self, ckpt: Any) -> Any: ...
+        Everything a training environment is -- rates, action, observation, drive
+        -- is already stated by the contract, so this is a derivation and not a
+        configuration: it produces data, and refuses a scenario it cannot derive
+        from before anything is started.
+        """
+
+    def train(self, plan: Any, conditions: Any) -> Any:
+        """Run the training the plan describes. Returns the run's directory."""
+
+    def export(self, run: Any) -> Any:
+        """Turn a finished run into an artifact of the store (ADR-0046)."""
+
+
+@runtime_checkable
+class TrainTask(Protocol):
+    """What is being learned: the sixth extension point (ADR-0044).
+
+    The part every task shares, whatever backend trains it. What a task
+    contributes to a concrete training environment -- rewards, terminations,
+    events, the range a goal is drawn from -- is phrased in the vocabulary of its
+    backend and declared next to that backend, as a twin's contribution is
+    (ADR-0024).
+
+    A task says what is learned and when it is done. It does not say how the data
+    is represented: the action, the observation, the drive and the rates come
+    from the contract, and this protocol has no member through which they could
+    be changed.
+    """
+
+    backend: str
+    """The ``world.backend`` this task is trained in."""
+
+    spec: SkillSpec
+    """What the future skill demands of a robot -- capabilities, control mode,
+    quantities. Travels into the manifest of the artifact (ADR-0046) and is what
+    the validator compares with a profile."""
+
+    completion: Completion
+    """When the trained skill has reached its goal, and how long it is given
+    (ADR-0043). The same tolerance the task scores success by in training, so
+    that it is one quantity in both worlds; ``horizon_s`` is the length of an
+    episode -- past it the policy was never trained."""

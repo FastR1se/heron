@@ -25,7 +25,7 @@ def description_path(instance: Instance) -> PurePosixPath:
     return instance.directory / DESCRIPTION_FILE
 
 
-def anchor_meshes(tree: ET.Element, instance: Instance) -> None:
+def anchor_meshes(tree: ET.Element, description: Path, mesh_dir: str | None = None) -> None:
     """Point every mesh of the copy at the file the input meant (ADR-0017).
 
     The input may say ``meshes/pelvis.STL`` and be right -- relative to the
@@ -35,13 +35,16 @@ def anchor_meshes(tree: ET.Element, instance: Instance) -> None:
     The reference is resolved exactly as the validator resolved it when it
     checked the file exists, and written as an absolute ``file://`` URI.
     References only a resource path can resolve are left as they are.
+
+    Takes the input's path rather than an instance of a scene: a copy is also
+    what a training run converts to USD (ADR-0048), and that copy stands in no
+    scene.
     """
-    mesh_dir = instance.profile.description.mesh_dir
     for mesh in tree.iter("mesh"):
         reference = mesh.get("filename")
         if reference is None:
             continue
-        target = resolve_mesh(reference, instance.description, mesh_dir)
+        target = resolve_mesh(reference, description, mesh_dir)
         if target is not None:
             mesh.set("filename", target.resolve().as_uri())
 
@@ -50,7 +53,7 @@ def description_copy(instance: Instance, root: Path) -> GeneratedFile:
     """The input description with what the scene needs appended to a copy."""
     description = parse_urdf(instance.description)
     tree = copy.deepcopy(description.tree)
-    anchor_meshes(tree, instance)
+    anchor_meshes(tree, instance.description, instance.profile.description.mesh_dir)
 
     # How a robot is driven in the world is the twin's to say, never the
     # input's: a control block left in a vendor's file would be a second,

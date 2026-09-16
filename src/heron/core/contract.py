@@ -304,6 +304,23 @@ class Contract(BaseModel):
         """Scale per joint; unstated is one."""
         return tuple(self.action.scale) if self.action.scale is not None else (1.0,) * self.dof
 
+    def action_targets(self) -> tuple[tuple[float, float], ...] | None:
+        """Every joint target a mapped action can command, per joint (ADR-0041).
+
+        ``origin + clip * scale``, ordered like ``joint_order``. ``None`` when the
+        contract states no ``clip``: the raw output of a network is unbounded, so
+        without one the set is unbounded too, and there is nothing to compare with
+        an envelope or to draw a training goal from.
+        """
+        if self.action.clip is None:
+            return None
+        low, high = self.action.clip
+        return tuple(
+            (min(origin + low * scale, origin + high * scale),
+             max(origin + low * scale, origin + high * scale))
+            for origin, scale in zip(self.origin(), self.action_scale(), strict=True)
+        )
+
     def normative(self) -> dict[str, Any]:
         """The fields that define identity, as plain data.
 
