@@ -21,14 +21,12 @@ them.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from ..core.capabilities import Capability
 from ..core.enums import ActionType, ControlMode, Status
 from ..core.models import SkillSpec
 from ..core.requires import Requirements
 from ..core.types import Command, RobotState
-from .base import BaseSkill
+from .base import BaseSkill, goal_target
 
 DEFAULT_DURATION_S = 2.0
 MIN_DURATION_S = 1e-3
@@ -60,44 +58,8 @@ class MoveJointsSkill(BaseSkill):
         self.started_at: float | None = None
 
     def on_start(self) -> None:
-        """Check the goal against the robot before a single command is sent.
-
-        A target of the wrong width or outside the envelope is a mistake in the
-        mission, and invariant 6 says a mistake that can be seen before a run
-        must not be discovered halfway through a motion. The adapter would
-        refuse the command too -- but by then the robot is already moving, and
-        it stops wherever the refusal caught it.
-        """
-        profile = self.context.profile
-        contract = profile.contract
-
-        target = self.goal.get("target")
-        if target is None:
-            raise ValueError(
-                f"{self.spec.name}: в цели нет поля target — "
-                f"вектор позиций суставов в порядке contract.joint_order"
-            )
-        self.target = _floats(target)
-        if len(self.target) != contract.dof:
-            raise ValueError(
-                f"{self.spec.name}: target на {len(self.target)} суставов при "
-                f"{contract.dof} в contract.joint_order "
-                f"({', '.join(contract.joint_order)})"
-            )
-
-        bounds = profile.limits.joint_position
-        if bounds is not None:
-            outside = [
-                contract.joint_order[i]
-                for i, value in enumerate(self.target)
-                if not (bounds.min[i] <= value <= bounds.max[i])
-            ]
-            if outside:
-                raise ValueError(
-                    f"{self.spec.name}: target вне лимитов профиля в суставах "
-                    f"{', '.join(outside)}; единицы цели — {contract.angle_unit}, "
-                    f"как в контракте"
-                )
+        """Check the goal against the robot before a single command is sent (``goal_target``)."""
+        self.target = goal_target(self.spec.name, self.goal, self.context.profile)
 
         self.duration = float(self.goal.get("duration", DEFAULT_DURATION_S))
         if self.duration < MIN_DURATION_S:
@@ -138,12 +100,3 @@ class MoveJointsSkill(BaseSkill):
             )
             return Status.SUCCESS
         return Status.RUNNING
-
-
-def _floats(value: object) -> tuple[float, ...]:
-    if isinstance(value, str) or not isinstance(value, Sequence):
-        raise ValueError(f"target: ожидался список чисел, получено {type(value).__name__}")
-    try:
-        return tuple(float(item) for item in value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"target: в списке не число ({exc})") from None

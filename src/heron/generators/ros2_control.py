@@ -73,6 +73,9 @@ BROADCASTER_TYPE: Final = names.BROADCASTER_TYPE
 
 CONTROLLERS_FILE: Final = "controllers.yaml"
 
+INTERPOLATION_NONE: Final = "none"
+"""``interpolation_method`` of the trajectory controller for an action closed through gains."""
+
 TWIN_PACKAGES: Final[dict[str, str]] = {
     "controller_manager": "ros2-control",
     "gz_ros2_control": "gz-ros2-control",
@@ -305,6 +308,11 @@ def controllers_config(instance: Instance) -> GeneratedFile:
             joint: {"p": p, "d": d}
             for joint, p, d in zip(joints, action.kp, action.kd, strict=True)
         }
+        # No interpolation between the state at receipt and the point: with splines
+        # the desired position is a ramp and the damping term acts on its slope,
+        # (q* - q) / T, which neither Isaac nor a drive has. The adapter sends the
+        # point at time zero with zero velocity, so the law is the contract's (ADR-0045).
+        controller["interpolation_method"] = INTERPOLATION_NONE
 
     return manager_config(
         instance,

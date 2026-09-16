@@ -13,7 +13,7 @@ would put mission knowledge into the platform.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..core.capabilities import Capability
@@ -22,6 +22,56 @@ from ..core.models import RobotProfile, SkillSpec
 from ..core.protocols import SkillContext
 from ..core.requires import Requirements
 from ..core.types import RobotState
+
+
+def goal_target(skill: str, goal: Mapping[str, Any], profile: RobotProfile) -> tuple[float, ...]:
+    """The goal's ``target``, checked against the robot before a single command is sent.
+
+    A target of the wrong width or outside the envelope is a mistake in the mission,
+    and invariant 6 says a mistake that can be seen before a run must not be
+    discovered halfway through a motion. The adapter would refuse the command too --
+    but by then the robot is already moving, and it stops wherever the refusal
+    caught it. One check for every skill whose goal is a joint pose, coded or
+    trained (ADR-0043).
+    """
+    contract = profile.contract
+    raw = goal.get("target")
+    if raw is None:
+        raise ValueError(
+            f"{skill}: в цели нет поля target — "
+            f"вектор позиций суставов в порядке contract.joint_order"
+        )
+    target = floats(raw)
+    if len(target) != contract.dof:
+        raise ValueError(
+            f"{skill}: target на {len(target)} суставов при "
+            f"{contract.dof} в contract.joint_order "
+            f"({', '.join(contract.joint_order)})"
+        )
+
+    bounds = profile.limits.joint_position
+    if bounds is not None:
+        outside = [
+            contract.joint_order[i]
+            for i, value in enumerate(target)
+            if not (bounds.min[i] <= value <= bounds.max[i])
+        ]
+        if outside:
+            raise ValueError(
+                f"{skill}: target вне лимитов профиля в суставах "
+                f"{', '.join(outside)}; единицы цели — {contract.angle_unit}, "
+                f"как в контракте"
+            )
+    return target
+
+
+def floats(value: object) -> tuple[float, ...]:
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"target: ожидался список чисел, получено {type(value).__name__}")
+    try:
+        return tuple(float(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"target: в списке не число ({exc})") from None
 
 
 def admissible(

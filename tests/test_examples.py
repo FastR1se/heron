@@ -95,6 +95,59 @@ def test_the_only_description_warning_is_the_gripper(robots: Path) -> None:
     assert codes == ["urdf.joint_not_in_contract"]
 
 
+def test_the_reference_arm_is_bolted_to_the_world(robots: Path) -> None:
+    """ADR-0048: the base is fixed in the description, and both worlds read it from there.
+
+    Until phase 6 there was no ``world`` link, and the arm stood in the ``table``
+    scene on a free base -- unnoticed, because nothing asked.
+    """
+    from heron.core.urdf import parse_urdf
+
+    model = parse_urdf(robots / "urdf" / "arm6.urdf")
+    assert model.fixed_to_world
+    assert model.root_link == "world"
+
+
+def test_the_reference_arm_states_what_a_policy_needs(robots: Path) -> None:
+    """ADR-0041, ADR-0042, ADR-0045 on the example: a reference pose, a mapping, a law."""
+    from heron.core.enums import ActionOffset, ObservationType
+
+    contract = Registry([robots]).load("arm6").contract
+    assert contract.revision == 2
+    assert contract.default_pose is not None
+    assert contract.action.has_gains
+    assert contract.action.offset is ActionOffset.DEFAULT_POSE
+    assert [term.type for term in contract.observation] == [
+        ObservationType.JOINT_POS_REL,
+        ObservationType.JOINT_VEL,
+        ObservationType.TARGET_JOINT_POS,
+        ObservationType.PREVIOUS_ACTION,
+    ]
+
+
+def test_every_goal_the_arm_can_be_commanded_is_one_it_can_start_from(
+    examples_dir: Path, robots: Path
+) -> None:
+    """The set of targets covers the scene's goal and the pose the world starts in.
+
+    The first is what the trained skill is asked for (ADR-0043); the second is where
+    the arm stands when a run begins, and a policy that cannot command it cannot
+    correct it.
+    """
+    contract = Registry([robots]).load("arm6").contract
+    clip = contract.action.clip
+    assert clip is not None
+    reach = [
+        (origin + clip[0] * scale, origin + clip[1] * scale)
+        for origin, scale in zip(contract.origin(), contract.action_scale(), strict=True)
+    ]
+    task = load_scenario(examples_dir / "scenarios" / "table.yaml").task
+    assert task is not None
+    for (low, high), value in zip(reach, task.goal["target"], strict=True):
+        assert low <= value <= high
+    assert all(low <= 0.0 <= high for low, high in reach)
+
+
 def test_the_command_robot_is_described_in_degrees(robots: Path) -> None:
     """Its contract says degrees, its description says radians, and the two
     agree only because the comparison converts."""

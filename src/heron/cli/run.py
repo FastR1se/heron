@@ -27,6 +27,7 @@ from typing import Any
 
 from .. import __version__
 from ..core.enums import Role, Status
+from ..core.loading import LoadError
 from ..core.models import RobotProfile, Scenario, ScenarioRobot, Task, sim_backend_of, sim_target
 from ..core.plugins import PluginError, load
 from ..core.protocols import ControlAdapter
@@ -37,7 +38,9 @@ from ..generators.twin import GazeboTwin
 from ..registry.registry import Registry
 from ..sdk.executor import Executor, RunResult
 from ..sdk.record import McapRecorder, RecordError, require_writer
+from ..skills.learned import PolicyRejectedError, PolicyRuntimeError
 from ..skills.library import SkillLibrary, SkillNotFoundError
+from ..store.policies import ArtifactNotFoundError, PolicyStore
 from ..validator.environment import Machine, check_adapter
 from ..validator.report import Report
 from ..validator.rules import check_scenario
@@ -188,12 +191,14 @@ def plan(
     would put a plausible falsehood on the screen at the moment a human is
     looking for the truth.
     """
+    binding = profile.skill(task.skill)
+    made_of = f" -> политика {binding.policy}" if binding is not None and binding.policy else ""
     lines = [
         f"сцена     {scenario.name}  (владелец физики {scenario.world.backend})",
         f"робот     {robot.id}  профиль {profile.name}  роль {robot.role}",
         f"связь     {target} -> {profile.adapters[target].plugin}",
         f"контракт  {profile.contract.contract_id}  revision {profile.contract.revision}",
-        f"навык     {task.skill}"
+        f"навык     {task.skill}{made_of}"
         + (f"  цель {task.goal}" if task.goal else ""),
         f"темп      команды {profile.contract.command_rate_hz:g} Гц, "
         f"состояние {profile.contract.state_rate_hz:g} Гц",
@@ -237,6 +242,7 @@ def record_metadata(
         "revision": str(contract.revision),
         "contract": contract.canonical_json(),
         "skill": task.skill,
+        "policy": getattr(profile.skill(task.skill), "policy", None) or "",
         "goal": json.dumps(task.goal, ensure_ascii=False, default=str),
         "platform_version": __version__,
         "started_utc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -252,6 +258,7 @@ def execute(
     skill: str | None = None,
     goal: dict[str, Any] | None = None,
     library: SkillLibrary | None = None,
+    store: PolicyStore | None = None,
     dry_run: bool = False,
     machine: Machine | None = None,
     scenario_path: Path | None = None,
@@ -270,7 +277,9 @@ def execute(
     to (ADR-0039); ``record`` is where the run is written as it happens (ADR-0038).
     """
     process = os.environ if environ is None else environ
-    report = check_scenario(scenario, registry, path=scenario_path)
+    skills = library if library is not None else SkillLibrary()
+    policies = store if store is not None else PolicyStore()
+    report = check_scenario(scenario, registry, path=scenario_path, store=policies)
     if not report.ok:
         raise RunError(
             f"сцена {scenario.name!r} не проходит проверку, запуск отменён "
@@ -280,13 +289,20 @@ def execute(
     robot = choose_robot(scenario, robot_id)
     profile = registry.load(robot.profile)
     chosen = choose_target(scenario, profile, target)
-    try:
-        task = task_of(scenario, skill, dict(goal or {}))
-        (library or SkillLibrary()).spec(task.skill)
-    except SkillNotFoundError as exc:
-        raise RunError(str(exc)) from exc
-
+    task = task_of(scenario, skill, dict(goal or {}))
     lines = plan(scenario, robot, profile, chosen, task)
+
+    # The declaration of the skill as this robot runs it: from the library, or from the
+    # manifest of the policy the profile binds it to (ADR-0046). An artifact this machine
+    # does not have is a line on a dry run's plan and a refusal of a real one.
+    try:
+        skills.spec_for(profile, task.skill, store=policies)
+    except ArtifactNotFoundError as exc:
+        if not dry_run:
+            raise RunError(f"{robot.id}: {exc}") from exc
+        lines.append(f"политика  не найдена: {exc}")
+    except (SkillNotFoundError, LoadError) as exc:
+        raise RunError(str(exc)) from exc
     try:
         world = world_environment(scenario, registry)
     except GeneratorError as exc:
@@ -319,6 +335,20 @@ def execute(
             require_writer()
         except RecordError as exc:
             raise RunError(f"{robot.id}: {exc}") from exc
+
+    # The skill is built before the link is: a policy that cannot drive this robot is a
+    # report with codes here, not a robot going mad on the first tick (ADR-0047).
+    try:
+        runnable = skills.create_for(profile, task.skill, store=policies)
+    except PolicyRejectedError as exc:
+        raise RunError(
+            f"{robot.id}: политика навыка {task.skill!r} не может вести этого робота, "
+            f"запуск отменён (инвариант 6):",
+            exc.report,
+        ) from exc
+    except (PolicyRuntimeError, ArtifactNotFoundError, SkillNotFoundError, LoadError) as exc:
+        raise RunError(f"{robot.id}: {exc}") from exc
+
     process.update(world)
 
     # What the adapter declares it needs is checked before it is constructed:
@@ -349,7 +379,9 @@ def execute(
         recorder = _open_record(record, record_metadata(scenario, robot, profile, chosen, task))
         result: RunResult | None = None
         try:
-            result = Executor(adapter, profile, library=library, recorder=recorder).run_task(task)
+            result = Executor(
+                adapter, profile, library=skills, recorder=recorder, store=policies
+            ).run(runnable, task.goal, name=task.skill)  # type: ignore[arg-type]
         finally:
             if recorder is not None:
                 recorder.close(result, error=sys.exc_info()[1])

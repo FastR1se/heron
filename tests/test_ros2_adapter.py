@@ -247,6 +247,30 @@ def test_command_mode_robot_gets_a_trajectory_with_one_point() -> None:
     assert sent.fields["joint_names"] == JOINTS
     assert sent.fields["points"][0]["positions"] == [0.1, 0.2, 0.3]
     assert sent.fields["points"][0]["time_from_start"] == pytest.approx(1 / 50)
+    assert "velocities" not in sent.fields["points"][0], "движение за время, а не закон привода"
+
+
+def test_gains_send_the_point_at_once_and_ask_for_no_speed() -> None:
+    """ADR-0045: the desired state is ``(q*, 0)`` from the tick the point arrives.
+
+    A later time makes the controller interpolate a ramp -- and the damping term
+    then acts on the slope of that ramp, which is a law neither Isaac nor a drive
+    computes. A whole period at zero torque is the other way to get it wrong.
+    """
+    profile = make_profile(
+        contract=make_contract(
+            action=ActionSpec(
+                type=ActionType.JOINT_POSITION, kp=[60.0] * 3, kd=[1.0] * 3
+            )
+        )
+    )
+    adapter, transport = connected(profile)
+    adapter.send_command(Command(type=ActionType.JOINT_POSITION, values=(0.1, 0.2, 0.3)))
+
+    point = transport.published[0].fields["points"][0]
+    assert point["positions"] == [0.1, 0.2, 0.3]
+    assert point["velocities"] == [0.0, 0.0, 0.0]
+    assert point["time_from_start"] == 0.0
 
 
 def test_command_of_the_wrong_kind_is_refused_not_converted() -> None:

@@ -226,6 +226,43 @@ Isaac Lab **v2.3.0**, коммит `3c6e67b` (28.10.2025), разреженна�
 **Проверка (Windows):** все тесты; `LearnedSkill` на `dummy` доходит до цели; каждое внесённое
 расхождение — ошибка с кодом до первого такта; сцены фаз 2–4 порождаются побайтно как до правки.
 
+### Итог этапа 2 (16.09.2026, сессия 19)
+
+| Карточка | Что появилось в коде |
+|---|---|
+| 1.1 [ADR-0041](../decisions/0041-policy-action-mapping-is-normative.md) | `Contract.default_pose`, `ActionSpec.scale` и `offset`, реестр `ActionOffset`; незаданное в каноническую форму не попадает — золотой идентификатор не изменился. Правила `contract.default_pose_outside_limits`, `contract.action_outside_limits`, `contract.action_envelope_unknown` |
+| 1.2 [ADR-0042](../decisions/0042-observation-terms-cover-the-contract.md) | термы `joint_pos_rel` и `target_joint_pos`; выводимые `observation_size`, `action_size`, `term_size` |
+| 1.5 [ADR-0045](../decisions/0045-one-drive-law-in-both-worlds.md) | `interpolation_method: none` у генератора и точка `time_from_start: 0` с нулевыми скоростями у адаптера; `kp`/`kd` `arm6` из инерций URDF (`scripts/phase6-arm6-gains.py`), `revision: 2` |
+| 1.6 [ADR-0046](../decisions/0046-policy-artifact-and-skill-binding.md) | `store/policies.py`: каталог артефакта, `artifact_id` от манифеста, атомарная запись, `train.json`; ссылка `<name>@<id>`; привязка в `skills` профиля; `policy show`, `policy check` |
+| 1.7 [ADR-0047](../decisions/0047-learned-skill.md) | `skills/learned.py`: сверка до `connect`, коды `policy.*`, такт «наблюдение → сеть → клип → отображение → команда → завершение» |
+| 1.8 [ADR-0048](../decisions/0048-usd-is-derived-and-base-fixing-comes-from-the-description.md) (часть) | звено `world` и фиксированный сустав в `arm6.urdf`; USD — на этапе 3 |
+
+Числа и наблюдения:
+
+- **Коэффициенты `arm6`** (критерий ADR-0045 п. 5): `kd = I_min/dt`, `kp = I_min/(4·dt²)`, где `I_min` —
+  наименьшая инерция подвижной части относительно оси сустава в рамке профиля. У всех суставов это даёт
+  собственную частоту `1/(2·dt)` и критическое демпфирование на самой лёгкой нагрузке, запас вдвое по `kd`
+  и в восемь раз по `kp`. **Цена:** на тяжёлой конфигурации демпфирование падает как `√(I_min/I)`, у `joint0`
+  при вытянутой руке ζ ≈ 0.07 (отношение инерций 240). Это предел явного PD на 100 Гц, а не выбор чисел;
+  проверять — на этапах 4 и 5.
+- **Сцены.** `humanoid`, `complex/g1` и профиль G1 порождаются как до правки (различие только в абсолютном
+  пути к `controllers.yaml`, он от выходного каталога). Сцены с `arm6` меняются ожидаемо: новый
+  `contract_id`, звено `world` (и корень визуализации `arm1/world`), интерфейс `effort` вместо `position`
+  с границами, `gains` и `interpolation_method: none`.
+- Проверено на `dummy`: `LearnedSkill` доходит до цели; семь внесённых расхождений контракта (порядок
+  суставов, поза отсчёта, частота, масштаб, смещение, коэффициенты, состав наблюдения) — `contract.field_mismatch`
+  с именем поля до первого такта; подменённая сеть — `policy.artifact_inconsistent`; сеть не той ширины —
+  `policy.onnx_signature_mismatch`.
+
+**Найдено по ходу:**
+
+- Правило рамки применимо только к профилям с отображением: у G1 и `rest_arm` нет ни `clip`, ни `scale`, и
+  новых замечаний они не получили.
+- `make_contract` тестов не годится для политики (нет терма цели) — появился общий `make_policy_contract`:
+  контракт без цели законно даёт `policy.completion_undefined`.
+- Временные каталоги тестов переехали на диск D (`.pytest-tmp`, `conftest.pytest_configure`): правило
+  CLAUDE.md о диске C относится и к ним.
+
 ---
 
 ## Этап 3. Бэкенд обучения и задача `arm6` (Windows — код, Linux — прогон)

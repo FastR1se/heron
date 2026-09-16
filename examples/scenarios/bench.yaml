@@ -7,7 +7,8 @@ world:
   backend: dummy
 
 robots:
-  - {id: arm1, profile: arm6, pose: [0.0, 0.0, 0.8], role: learner}
+  # scripted, а не learner: в мире dummy никто не учится, а ученику нужна задача обучения (ADR-0044).
+  - {id: arm1, profile: arm6, pose: [0.0, 0.0, 0.8], role: scripted}
   - {id: arm2, profile: rest_arm, pose: [1.0, 0.0, 0.8], role: static}
 
 task:

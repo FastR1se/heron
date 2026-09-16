@@ -12,12 +12,20 @@ rename must not have to rewrite user data.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .capabilities import Capability
-from .contract import Contract
+from .contract import CONTRACT_ID_LENGTH, Contract, canonical_dumps, digest
 from .enums import AccessLevel, ControlMode, Role
 from .requires import Requirements
 
@@ -25,10 +33,45 @@ NAME_RE: Final = re.compile(r"^[a-z][a-z0-9_]*$")
 SIM_TARGET_PREFIX: Final = "sim."
 REAL_TARGET: Final = "real"
 
+POLICY_REF_SEPARATOR: Final = "@"
+POLICY_REF_RE: Final = re.compile(
+    rf"^([a-z][a-z0-9_]*){POLICY_REF_SEPARATOR}([0-9a-f]{{{CONTRACT_ID_LENGTH}}})$"
+)
+"""``<name>@<artifact_id>``, the identifier in full (ADR-0046)."""
+
+SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+
 
 def _check_name(value: str) -> str:
     if not NAME_RE.match(value):
         raise ValueError(f"{value!r}: имя — нижний регистр, [a-z][a-z0-9_]*")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyRef:
+    """A policy artifact named the one way a profile and a scenario name it (ADR-0046)."""
+
+    name: str
+    artifact_id: str
+
+    @classmethod
+    def parse(cls, text: str) -> PolicyRef:
+        match = POLICY_REF_RE.match(text) if isinstance(text, str) else None
+        if match is None:
+            raise ValueError(
+                f"{text!r}: ссылка на политику — <имя>{POLICY_REF_SEPARATOR}<идентификатор>, "
+                f"идентификатор полностью, {CONTRACT_ID_LENGTH} шестнадцатеричных символов"
+            )
+        return cls(name=match.group(1), artifact_id=match.group(2))
+
+    def __str__(self) -> str:
+        return f"{self.name}{POLICY_REF_SEPARATOR}{self.artifact_id}"
+
+
+def _check_policy_ref(value: str | None) -> str | None:
+    if value is not None:
+        PolicyRef.parse(value)
     return value
 
 
@@ -122,6 +165,54 @@ class AdapterSpec(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class SkillBinding(BaseModel):
+    """One entry of a profile's ``skills``: a name, and what implements it (ADR-0046).
+
+    Written as the name alone for a skill of the library, or as a mapping of one key
+    for a trained policy under that name::
+
+        skills: [hold, {move_joints: arm6_reach@3f2a9c1d0b7e4a55}]
+
+    A mission names the skill; the profile says how it is made. Swapping one for the
+    other is this line (invariant 4).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    policy: str | None = None
+    """``<name>@<artifact_id>`` of the artifact that implements the skill, if a policy does."""
+
+    _validate_name = field_validator("name")(_check_name)
+    _validate_policy = field_validator("policy")(_check_policy_ref)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_yaml(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"name": data}
+        if isinstance(data, dict) and set(data) - {"name", "policy"}:
+            if len(data) != 1:
+                raise ValueError(
+                    f"{data!r}: навык — имя или отображение из одного ключа "
+                    f"«имя навыка: ссылка на политику»"
+                )
+            ((name, policy),) = data.items()
+            return {"name": name, "policy": policy}
+        return data
+
+    @model_serializer
+    def _to_yaml(self) -> str | dict[str, str]:
+        return self.name if self.policy is None else {self.name: self.policy}
+
+    @property
+    def ref(self) -> PolicyRef | None:
+        return PolicyRef.parse(self.policy) if self.policy is not None else None
+
+    def __str__(self) -> str:
+        return self.name if self.policy is None else f"{self.name} -> {self.policy}"
+
+
 class RobotProfile(BaseModel):
     """Full declarative description of a robot. The single source of truth."""
 
@@ -136,7 +227,9 @@ class RobotProfile(BaseModel):
     access_levels: tuple[AccessLevel, ...] = ()
     limits: Limits = Field(default_factory=Limits)
     adapters: dict[str, AdapterSpec] = Field(min_length=1)
-    skills: tuple[str, ...] = ()
+    skills: tuple[SkillBinding, ...] = ()
+    """What this robot is to be asked for, and how each is made (ADR-0046)."""
+
     image: str | None = None
     """Bare image name (``robot-arm:latest``). The namespace is prepended by
     ``branding.image_name``; it is not part of the data (section 17)."""
@@ -155,6 +248,17 @@ class RobotProfile(BaseModel):
                     f"{target!r}: ключ адаптера — {REAL_TARGET!r} или "
                     f"{SIM_TARGET_PREFIX}<бэкенд>, например {sim_target('gazebo')!r}"
                 )
+        return value
+
+    @field_validator("skills")
+    @classmethod
+    def _unique_skills(cls, value: tuple[SkillBinding, ...]) -> tuple[SkillBinding, ...]:
+        names = [item.name for item in value]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(
+                f"навык объявлен дважды: {', '.join(duplicates)}. Одно имя — одна реализация"
+            )
         return value
 
     @model_validator(mode="after")
@@ -179,6 +283,10 @@ class RobotProfile(BaseModel):
     @property
     def has_real_adapter(self) -> bool:
         return REAL_TARGET in self.adapters
+
+    def skill(self, name: str) -> SkillBinding | None:
+        """How this robot implements a skill, or ``None`` if it does not declare it."""
+        return next((item for item in self.skills if item.name == name), None)
 
 
 class SkillSpec(BaseModel):
@@ -217,12 +325,14 @@ class ScenarioRobot(BaseModel):
     pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
     role: Role = Role.STATIC
     policy: str | None = None
-    """Artifact id of the frozen policy. Required for role ``frozen``."""
+    """``<name>@<artifact_id>`` of the frozen policy, as a profile names one (ADR-0046).
+    Required for role ``frozen``."""
 
     trajectory: str | None = None
     """Artifact id of the recorded trajectory. Required for role ``replay``."""
 
     _validate_id = field_validator("id")(_check_name)
+    _validate_policy = field_validator("policy")(_check_policy_ref)
 
     @model_validator(mode="after")
     def _role_payload(self) -> ScenarioRobot:
@@ -282,12 +392,53 @@ class Scenario(BaseModel):
         return tuple(robot for robot in self.robots if robot.role is Role.LEARNER)
 
 
+class Completion(BaseModel):
+    """When a trained skill has reached its goal, as its training task defined it (ADR-0043).
+
+    ``SUCCESS`` once ``max |q - target| <= tolerance`` has held for ``hold_s`` of world
+    time; ``FAILURE`` when that has not happened within ``horizon_s``, the length of a
+    training episode -- past it the policy was never trained.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tolerance: float = Field(gt=0)
+    """In the contract's ``angle_unit``."""
+
+    hold_s: float = Field(ge=0)
+    horizon_s: float = Field(gt=0)
+
+
+class OnnxSignature(BaseModel):
+    """What the exported graph is, recorded next to it (ADR-0046)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sha256: str
+    """Of ``policy.onnx``, so that the artifact identifier covers the network too."""
+
+    input: str
+    output: str
+    observation_size: int = Field(gt=0)
+    action_size: int = Field(gt=0)
+    opset: int = Field(gt=0)
+
+    @field_validator("sha256")
+    @classmethod
+    def _hex(cls, value: str) -> str:
+        if not SHA256_RE.match(value):
+            raise ValueError(f"{value!r}: sha256 — 64 шестнадцатеричных символа в нижнем регистре")
+        return value
+
+
 class PolicyManifest(BaseModel):
-    """JSON companion of an exported ONNX policy (invariant 2, ADR-0004).
+    """JSON companion of an exported ONNX policy (invariant 2, ADR-0004, ADR-0046).
 
     The contract travels with the artifact, and the identifier it was created
     under travels next to the contract, so that a tampered file fails the check
-    instead of passing it.
+    instead of passing it. The artifact itself is named by this document's
+    content: its canonical form hashed, which covers the network through
+    ``onnx.sha256``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -298,6 +449,9 @@ class PolicyManifest(BaseModel):
     contract_id: str
     capabilities: frozenset[Capability] = Field(min_length=1)
     control_mode: ControlMode = ControlMode.STREAMING
+    requires: Requirements = Field(default_factory=Requirements)
+    completion: Completion
+    onnx: OnnxSignature
 
     _validate_name = field_validator("name")(_check_name)
 
@@ -305,3 +459,32 @@ class PolicyManifest(BaseModel):
     def self_consistent(self) -> bool:
         """Whether the recorded identifier matches the carried contract."""
         return self.contract_id == self.contract.contract_id
+
+    def canonical_json(self) -> str:
+        """The pinned form of ADR-0006, applied to the whole manifest.
+
+        The contract enters as its normative form plus ``revision``, so that an
+        unstated optional field is absent here as it is from ``contract_id``; the
+        capabilities, a set, enter sorted.
+        """
+        data = self.model_dump(mode="json")
+        data["contract"] = {**self.contract.normative(), "revision": self.contract.revision}
+        data["capabilities"] = sorted(self.capabilities)
+        return canonical_dumps(data)
+
+    @property
+    def artifact_id(self) -> str:
+        """``sha256(canonical form)[:16]`` -- the name of the artifact (ADR-0046)."""
+        return digest(self.canonical_json())
+
+    def ref(self) -> PolicyRef:
+        return PolicyRef(name=self.name, artifact_id=self.artifact_id)
+
+    def skill_spec(self, name: str) -> SkillSpec:
+        """The declaration of the skill this policy implements, under the name it is bound to."""
+        return SkillSpec(
+            name=name,
+            required_capabilities=self.capabilities,
+            required_control_mode=self.control_mode,
+            requires=self.requires,
+        )

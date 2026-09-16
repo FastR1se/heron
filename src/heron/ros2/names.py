@@ -52,6 +52,7 @@ VELOCITY_INTERFACE: Final = "velocity"
 
 STATE_INTERFACES: Final[dict[ObservationType, str]] = {
     ObservationType.JOINT_POS: "position",
+    ObservationType.JOINT_POS_REL: "position",
     ObservationType.JOINT_VEL: "velocity",
     ObservationType.JOINT_TORQUE: "effort",
 }

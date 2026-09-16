@@ -27,6 +27,9 @@ record = ["mcap>=1.1"]
 ros2 = ["numpy"]
 dev = [
     "mcap>=1.1",
+    # Tests build tiny policies with onnx and run them with onnxruntime (ADR-0047).
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
     "pytest>=8.0",
     "ruff>=0.5",
     "mypy>=1.10",
@@ -90,6 +93,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["mcap", "mcap.*"]
 follow_imports = "skip"
+ignore_missing_imports = true
+
+# A policy is run through onnxruntime, imported when an artifact is loaded (ADR-0047); tests
+# build networks with onnx. Neither ships type information.
+[[tool.mypy.overrides]]
+module = ["onnx", "onnx.*", "onnxruntime", "onnxruntime.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

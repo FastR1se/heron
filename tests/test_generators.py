@@ -669,6 +669,9 @@ def test_gains_become_the_trajectory_controllers_law(tmp_path: Path) -> None:
         "joint1": {"p": 100.0, "d": 2.0},
         "joint2": {"p": 40.0, "d": 1.0},
     }
+    # Without this the controller interpolates from the state at receipt and damps the
+    # slope of its own ramp, (q* - q) / T -- not the law the contract states (ADR-0045).
+    assert controller["interpolation_method"] == "none"
 
 
 def test_an_effort_interface_is_not_bounded_by_angles(tmp_path: Path) -> None:

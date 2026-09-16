@@ -194,6 +194,98 @@ def test_gains_refuse_a_contract_in_degrees() -> None:
         make_contract(3, angle_unit=AngleUnit.DEG, action=_gains())
 
 
+# -- the mapping of a policy's output (ADR-0041, ADR-0042) -------------------
+
+
+def _mapped(**action: Any) -> dict[str, Any]:
+    return {"type": ActionType.JOINT_POSITION, "clip": (-1.0, 1.0), **action}
+
+
+def test_an_unstated_mapping_leaves_every_identifier_as_it_was() -> None:
+    """The rule of gains, made general: unstated is absent, not defaulted."""
+    form = json.loads(reference().canonical_json())
+    assert "default_pose" not in form
+    assert set(form["action"]) == {"type", "clip"}
+    assert reference().contract_id == GOLDEN_ID
+
+
+def test_the_reference_pose_changes_identity() -> None:
+    a = reference()
+    b = variant(default_pose=[0.1, 0.0, -0.1])
+    assert not compatible(a, b)
+    assert [d.field for d in diff(a, b)] == ["default_pose"]
+    assert '"default_pose":[0.1,0.0,-0.1]' in b.canonical_json()
+
+
+def test_the_same_network_with_another_scale_is_another_policy() -> None:
+    """The failure ADR-0041 is written against: one identifier, two meanings."""
+    plain = reference()
+    scaled = variant(action=_mapped(scale=[0.5, 0.5, 0.5]))
+    offset = variant(default_pose=[0.0, 0.0, 0.0], action=_mapped(offset="default_pose"))
+    assert len({plain.contract_id, scaled.contract_id, offset.contract_id}) == 3
+    assert [d.field for d in diff(plain, scaled)] == ["action"]
+
+
+def test_scale_is_ordered_like_the_joints() -> None:
+    with pytest.raises(ValueError, match="scale"):
+        make_contract(3, action=_mapped(scale=[0.5, 0.5]))
+
+
+def test_a_joint_the_policy_cannot_move_is_not_a_scale_of_zero() -> None:
+    with pytest.raises(ValueError, match="scale"):
+        make_contract(3, action=_mapped(scale=[0.5, 0.0, 0.5]))
+
+
+def test_scale_belongs_to_an_action_that_has_joints() -> None:
+    with pytest.raises(ValueError, match="scale"):
+        make_contract(3, action={"type": ActionType.CARTESIAN_POSE, "scale": [1.0]})
+
+
+def test_an_offset_needs_a_pose_to_be_offset_from() -> None:
+    with pytest.raises(ValueError, match="default_pose"):
+        make_contract(3, action=_mapped(offset="default_pose"))
+
+
+def test_only_a_position_is_offset_by_a_pose() -> None:
+    with pytest.raises(ValueError, match="offset"):
+        make_contract(
+            3,
+            default_pose=[0.0, 0.0, 0.0],
+            action={"type": ActionType.JOINT_VELOCITY, "offset": "default_pose"},
+        )
+
+
+def test_the_reference_pose_is_ordered_like_the_joints() -> None:
+    with pytest.raises(ValueError, match="default_pose"):
+        make_contract(3, default_pose=[0.0, 0.0])
+
+
+def test_a_relative_pose_needs_a_reference() -> None:
+    with pytest.raises(ValueError, match="default_pose"):
+        make_contract(3, observation=[{"type": ObservationType.JOINT_POS_REL}])
+
+
+def test_widths_are_derived_and_not_declared() -> None:
+    contract = make_contract(
+        3,
+        default_pose=[0.0, 0.0, 0.0],
+        observation=[
+            {"type": ObservationType.JOINT_POS_REL},
+            {"type": ObservationType.TARGET_JOINT_POS},
+            {"type": ObservationType.PREVIOUS_ACTION},
+            {"type": ObservationType.BASE_ORIENTATION},
+        ],
+    )
+    assert contract.action_size == 3
+    assert contract.observation_size == 3 + 3 + 3 + 4
+    assert contract.term_size(ObservationType.BASE_LIN_VEL) == 3
+
+
+def test_an_unstated_mapping_has_defaults_nobody_writes() -> None:
+    assert reference().origin() == (0.0, 0.0, 0.0)
+    assert reference().action_scale() == (1.0, 1.0, 1.0)
+
+
 def test_contract_is_frozen() -> None:
     """An identifier computed from a mutable object is a broken promise."""
     with pytest.raises(ValueError):

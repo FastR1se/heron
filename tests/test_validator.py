@@ -11,15 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from conftest import make_contract, make_profile
+from conftest import make_contract, make_policy_contract, make_profile
 from heron.core.capabilities import Capability
-from heron.core.enums import ControlMode
+from heron.core.contract import ActionSpec, Contract, ObservationTerm
+from heron.core.enums import ActionOffset, ActionType, ControlMode, ObservationType
 from heron.core.models import (
     AdapterSpec,
+    Completion,
     JointMax,
     JointRange,
     Limits,
+    OnnxSignature,
     PolicyManifest,
+    RobotProfile,
     Scenario,
     SkillSpec,
 )
@@ -215,26 +219,43 @@ def test_expressions_rejected() -> None:
 
 
 def make_manifest(**overrides: object) -> PolicyManifest:
-    contract = overrides.pop("contract", make_contract())
+    contract = overrides.pop("contract", make_policy_contract())
+    assert isinstance(contract, Contract)
     fields: dict[str, object] = {
         "schema_version": 1,
         "name": "reach_v1",
         "contract": contract,
-        "contract_id": contract.contract_id,  # type: ignore[union-attr]
+        "contract_id": contract.contract_id,
         "capabilities": frozenset({Capability("arm.joint_position")}),
+        "completion": Completion(tolerance=0.01, hold_s=0.05, horizon_s=2.0),
+        "onnx": OnnxSignature(
+            sha256="0" * 64,
+            input="obs",
+            output="actions",
+            observation_size=contract.observation_size or 1,
+            action_size=contract.action_size or 1,
+            opset=18,
+        ),
     }
     fields.update(overrides)
     return PolicyManifest(**fields)  # type: ignore[arg-type]
 
 
+def trained_for() -> RobotProfile:
+    """A robot whose contract is the one the manifests above were made against."""
+    return make_profile(contract=make_policy_contract())
+
+
 def test_matching_policy_passes() -> None:
-    assert check_policy_against_profile(make_manifest(), make_profile()).ok
+    assert check_policy_against_profile(make_manifest(), trained_for()).ok
 
 
 def test_policy_with_reordered_joints_is_rejected_by_field() -> None:
     """The mismatch is reported by field, not as "hashes differ" (ADR-0004)."""
-    manifest = make_manifest(contract=make_contract(joint_order=["joint1", "joint0", "joint2"]))
-    report = check_policy_against_profile(manifest, make_profile())
+    manifest = make_manifest(
+        contract=make_policy_contract(joint_order=["joint1", "joint0", "joint2"])
+    )
+    report = check_policy_against_profile(manifest, trained_for())
     assert not report.ok
     assert "contract.field_mismatch" in report.codes()
     assert report.errors[0].detail["field"] == "joint_order"
@@ -243,8 +264,121 @@ def test_policy_with_reordered_joints_is_rejected_by_field() -> None:
 def test_tampered_manifest_is_rejected() -> None:
     """The identifier is computed, so editing it cannot fake compatibility."""
     manifest = make_manifest(contract_id="0000000000000000")
-    report = check_policy_against_profile(manifest, make_profile())
+    report = check_policy_against_profile(manifest, trained_for())
     assert "policy.manifest_inconsistent" in report.codes()
+
+
+def test_recorded_widths_are_held_against_the_contract() -> None:
+    """Widths are derived, not declared: a manifest that declares another one lies."""
+    contract = make_policy_contract()
+    manifest = make_manifest(
+        contract=contract,
+        onnx=OnnxSignature(
+            sha256="0" * 64,
+            input="obs",
+            output="actions",
+            observation_size=(contract.observation_size or 0) + 1,
+            action_size=contract.action_size or 1,
+            opset=18,
+        ),
+    )
+    report = check_policy_against_profile(manifest, trained_for())
+    assert "policy.manifest_inconsistent" in report.codes()
+
+
+# -- what the one implementation of a trained skill cannot execute (ADR-0047) --
+
+
+def test_a_policy_over_the_contract_of_a_reaching_task_passes() -> None:
+    contract = make_policy_contract()
+    profile = make_profile(contract=contract)
+    assert check_policy_against_profile(make_manifest(contract=contract), profile).ok
+
+
+def test_a_policy_without_a_goal_term_has_no_completion() -> None:
+    contract = make_policy_contract(
+        observation=[ObservationTerm(type=ObservationType.JOINT_POS_REL)]
+    )
+    report = check_policy_against_profile(
+        make_manifest(contract=contract), make_profile(contract=contract)
+    )
+    assert "policy.completion_undefined" in report.codes()
+
+
+def test_a_policy_observing_the_base_velocity_is_rejected() -> None:
+    """``RobotState`` does not carry it, and inventing it would be a lie (ADR-0042)."""
+    contract = make_policy_contract(
+        observation=[
+            ObservationTerm(type=ObservationType.BASE_LIN_VEL),
+            ObservationTerm(type=ObservationType.TARGET_JOINT_POS),
+        ]
+    )
+    report = check_policy_against_profile(
+        make_manifest(contract=contract), make_profile(contract=contract)
+    )
+    finding = next(f for f in report.errors if f.code == "policy.observation_unavailable")
+    assert finding.detail["terms"] == ["base_lin_vel"]
+
+
+def test_a_policy_that_does_not_command_positions_is_rejected_in_this_phase() -> None:
+    contract = make_policy_contract(
+        action=ActionSpec(type=ActionType.JOINT_VELOCITY, clip=(-1.0, 1.0))
+    )
+    report = check_policy_against_profile(
+        make_manifest(contract=contract), make_profile(contract=contract)
+    )
+    assert "policy.action_unsupported" in report.codes()
+
+
+# -- what a policy may command (ADR-0041) ----------------------------------
+
+
+def test_targets_a_policy_can_reach_lie_inside_the_envelope() -> None:
+    contract = make_policy_contract()
+    profile = make_profile(contract=contract)  # limits +-2, targets 0.1 +- 0.5
+    assert check_profile(profile).ok
+
+
+def test_a_scale_that_reaches_past_the_envelope_is_an_error() -> None:
+    contract = make_policy_contract(
+        action=ActionSpec(
+            type=ActionType.JOINT_POSITION,
+            clip=(-1.0, 1.0),
+            scale=[3.0, 0.5, 0.5],
+            offset=ActionOffset.DEFAULT_POSE,
+        )
+    )
+    report = check_profile(make_profile(contract=contract))
+    finding = next(f for f in report.errors if f.code == "contract.action_outside_limits")
+    assert list(finding.detail["joints"]) == ["joint0"]
+    assert finding.detail["joints"]["joint0"]["targets"] == [-2.9, 3.1]
+
+
+def test_a_mapping_without_a_clip_leaves_the_targets_unbounded() -> None:
+    """The output of a trained network is not bounded by anything else (ADR-0041)."""
+    contract = make_policy_contract(
+        action=ActionSpec(
+            type=ActionType.JOINT_POSITION,
+            scale=[0.5, 0.5, 0.5],
+            offset=ActionOffset.DEFAULT_POSE,
+        )
+    )
+    report = check_profile(make_profile(contract=contract))
+    assert "contract.action_outside_limits" in report.codes()
+
+
+def test_without_an_envelope_there_is_nothing_to_check() -> None:
+    contract = make_policy_contract()
+    report = check_profile(make_profile(contract=contract, limits=Limits()))
+    assert report.ok
+    assert "contract.action_envelope_unknown" in report.codes()
+
+
+def test_a_reference_pose_outside_the_envelope_is_an_error() -> None:
+    contract = make_policy_contract(default_pose=[9.0, -0.1, 0.2])
+    report = check_profile(make_profile(contract=contract))
+    finding = next(f for f in report.errors if f.code == "contract.default_pose_outside_limits")
+    assert list(finding.detail["joints"]) == ["joint0"]
 
 
 # -- scenario --------------------------------------------------------------

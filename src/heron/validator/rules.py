@@ -15,10 +15,9 @@ from pathlib import Path
 from ..core import capabilities as caps
 from ..core import requires as req
 from ..core.branding import DOCKER_NAMESPACE
-from ..core.contract import Contract, diff
-from ..core.enums import ControlMode, Role, TwinKind
+from ..core.enums import ActionType, ControlMode, Role, TwinKind
+from ..core.loading import LoadError
 from ..core.models import (
-    PolicyManifest,
     RobotProfile,
     Scenario,
     ScenarioRobot,
@@ -29,8 +28,10 @@ from ..core.plugins import PluginError, available
 from ..core.twins import TwinError, find_twin, why_missing
 from ..registry.lock import ContractLock
 from ..registry.registry import ProfileNotFoundError, Registry
+from ..store.policies import PolicyStore
 from .description import check_description
 from .mjcf import check_mjcf, check_mujoco_world
+from .policy import check_policy_against_profile
 from .report import Report, error, warning
 
 # --------------------------------------------------------------------------
@@ -43,6 +44,7 @@ def check_profile(
     *,
     lock: ContractLock | None = None,
     path: Path | None = None,
+    store: PolicyStore | None = None,
 ) -> Report:
     """Everything decidable from a single profile.
 
@@ -50,6 +52,9 @@ def check_profile(
     points at becomes reachable, and the rules of ``description`` join in; a
     profile validated as a bare object is validated without them, and says so by
     simply not reporting them.
+
+    ``store`` is where a policy a skill is bound to is looked for; the platform's
+    own store when not given, and only opened when a skill is bound to one.
     """
     report = Report()
     where = f"profile:{profile.name}"
@@ -58,8 +63,10 @@ def check_profile(
     _check_limit_lengths(profile, report)
     _check_rates(profile, report)
     _check_observation_terms(profile, report)
+    _check_action_envelope(profile, report)
     _check_image(profile, report)
     _check_adapters(profile, report)
+    _check_skill_bindings(profile, report, store)
     if path is not None:
         report.extend(check_description(profile, path).findings)
         report.extend(check_mjcf(profile, path).findings)
@@ -148,6 +155,148 @@ def _check_observation_terms(profile: RobotProfile, report: Report) -> None:
                 f"терм повторяется: {', '.join(duplicates)}",
                 hint="повтор с разными scale читается как ошибка копирования",
             )
+        )
+
+
+def _check_action_envelope(profile: RobotProfile, report: Report) -> None:
+    """What a policy can command lies inside the envelope, checked before it moves (ADR-0041).
+
+    A target outside the envelope is a refusal of the adapter halfway through a motion
+    (ADR-0026), and the set of targets a mapped action can reach is known from the
+    contract alone: ``origin + [clip_lo, clip_hi] * scale``, joint by joint.
+    """
+    contract = profile.contract
+    action = contract.action
+    where = f"profile:{profile.name}.contract"
+    bounds = profile.limits.joint_position
+    if bounds is not None and len(bounds.min) != contract.dof:
+        return  # limits.length_mismatch already says so, and nothing lines up to compare
+
+    if contract.default_pose is not None and bounds is not None:
+        outside = {
+            name: {"value": value, "min": low, "max": high}
+            for name, value, low, high in zip(
+                contract.joint_order, contract.default_pose, bounds.min, bounds.max, strict=True
+            )
+            if not low <= value <= high
+        }
+        if outside:
+            report.add(
+                error(
+                    "contract.default_pose_outside_limits",
+                    f"{where}.default_pose",
+                    f"поза отсчёта вне рамки limits.joint_position в суставах "
+                    f"{', '.join(outside)}",
+                    hint="поза, от которой считаются действие и наблюдение, обязана быть в рамке",
+                    adr="ADR-0041",
+                    detail={"joints": outside},
+                )
+            )
+
+    if action.type is not ActionType.JOINT_POSITION:
+        return
+    if action.clip is None and not action.maps_output:
+        return
+    if bounds is None:
+        report.add(
+            warning(
+                "contract.action_envelope_unknown",
+                f"{where}.action",
+                "цели политики не с чем сверить: в профиле нет limits.joint_position",
+                hint="без рамки адаптер не откажет, а валидатор не предупредит",
+                adr="ADR-0041",
+            )
+        )
+        return
+    if action.clip is None:
+        report.add(
+            error(
+                "contract.action_outside_limits",
+                f"{where}.action",
+                "масштаб или смещение заданы без clip: цели политики ничем не ограничены",
+                hint="выход сети не ограничен; clip над сырым выходом задаёт множество целей",
+                adr="ADR-0041",
+                detail={"joints": {}, "clip": None},
+            )
+        )
+        return
+
+    clip_low, clip_high = action.clip
+    outside_set: dict[str, dict[str, list[float]]] = {}
+    for name, origin, scale, low, high in zip(
+        contract.joint_order,
+        contract.origin(),
+        contract.action_scale(),
+        bounds.min,
+        bounds.max,
+        strict=True,
+    ):
+        ends = (origin + clip_low * scale, origin + clip_high * scale)
+        reach = [min(ends), max(ends)]
+        if reach[0] < low or reach[1] > high:
+            outside_set[name] = {"targets": reach, "limits": [low, high]}
+    if outside_set:
+        report.add(
+            error(
+                "contract.action_outside_limits",
+                f"{where}.action",
+                f"политика может приказать цель вне рамки limits.joint_position в суставах "
+                f"{', '.join(outside_set)}",
+                hint=(
+                    "уменьшите scale, сдвиньте default_pose или сузьте clip: "
+                    "origin + clip · scale обязано лежать в рамке"
+                ),
+                adr="ADR-0041",
+                detail={"joints": outside_set, "clip": [clip_low, clip_high]},
+            )
+        )
+
+
+def _check_skill_bindings(
+    profile: RobotProfile, report: Report, store: PolicyStore | None
+) -> None:
+    """A skill bound to a policy is checked against the artifact, when the artifact is here.
+
+    Absent from this machine's store it is a warning: the data is right and the
+    machine is not the one it was trained for, the way an environment is (ADR-0025).
+    ``run`` makes the same absence an error (ADR-0046).
+    """
+    bound = [(binding, ref) for binding in profile.skills if (ref := binding.ref) is not None]
+    if not bound:
+        return
+    policies = store if store is not None else PolicyStore()
+    for binding, ref in bound:
+        spot = f"profile:{profile.name}.skills.{binding.name}"
+        try:
+            artifact = policies.find(ref)
+        except LoadError as exc:
+            report.add(
+                error(
+                    "policy.artifact_inconsistent",
+                    spot,
+                    f"манифест политики {ref} не читается: {exc}",
+                    adr="ADR-0046",
+                    detail={"policy": str(ref)},
+                )
+            )
+            continue
+        if artifact is None:
+            report.add(
+                warning(
+                    "policy.not_in_store",
+                    spot,
+                    f"политика {ref} не найдена в хранилище {policies.root}",
+                    hint=(
+                        "профиль верен, но на этой машине навык не исполнить; "
+                        "run откажет с этой же причиной"
+                    ),
+                    adr="ADR-0046",
+                    detail={"policy": str(ref), "store": str(policies.root)},
+                )
+            )
+            continue
+        report.extend(
+            check_policy_against_profile(artifact.manifest, profile, artifact=artifact).findings
         )
 
 
@@ -250,84 +399,16 @@ def check_skill_against_profile(skill: SkillSpec, profile: RobotProfile) -> Repo
 
 
 # --------------------------------------------------------------------------
-# A policy artifact against a robot.
-# --------------------------------------------------------------------------
-
-
-def check_policy_against_profile(manifest: PolicyManifest, profile: RobotProfile) -> Report:
-    """Whether an exported policy may drive this robot (invariant 2, ADR-0004)."""
-    report = Report()
-    where = f"policy:{manifest.name} -> profile:{profile.name}"
-
-    if not manifest.self_consistent:
-        report.add(
-            error(
-                "policy.manifest_inconsistent",
-                where,
-                f"записанный contract_id {manifest.contract_id} не соответствует "
-                f"приложенному контракту ({manifest.contract.contract_id})",
-                hint=(
-                    "идентификатор вычисляется, а не пишется; "
-                    "артефакт повреждён или отредактирован"
-                ),
-                adr="ADR-0004",
-            )
-        )
-
-    report.extend(check_contracts(manifest.contract, profile.contract, where=where).findings)
-
-    absent = caps.missing(manifest.capabilities, profile.capabilities)
-    if absent:
-        report.add(
-            error(
-                "policy.capabilities_missing",
-                where,
-                f"робот не объявляет: {', '.join(sorted(absent))}",
-                adr="ADR-0001",
-                detail={"missing": sorted(absent)},
-            )
-        )
-    return report
-
-
-def check_contracts(left: Contract, right: Contract, *, where: str) -> Report:
-    """Compare two contracts, reporting differing fields rather than hashes."""
-    report = Report()
-    if left.contract_id == right.contract_id:
-        return report
-    differences = diff(left, right)
-    for item in differences:
-        report.add(
-            error(
-                "contract.field_mismatch",
-                f"{where}.{item.field}",
-                item.describe("у артефакта", "в профиле"),
-                hint="переобучать политику или править профиль — решает человек",
-                adr="ADR-0004",
-                detail={"field": item.field, "artifact": item.left, "profile": item.right},
-            )
-        )
-    if not differences:  # pragma: no cover - would mean a broken canonical form
-        report.add(
-            error(
-                "contract.identity_mismatch",
-                where,
-                f"идентификаторы различаются ({left.contract_id} и {right.contract_id}) "
-                f"при совпадающих нормативных полях",
-                hint="сломана каноническая сериализация — это ошибка ядра",
-                adr="ADR-0004",
-            )
-        )
-    return report
-
-
-# --------------------------------------------------------------------------
 # A scenario against the registry.
 # --------------------------------------------------------------------------
 
 
 def check_scenario(
-    scenario: Scenario, registry: Registry, *, path: Path | None = None
+    scenario: Scenario,
+    registry: Registry,
+    *,
+    path: Path | None = None,
+    store: PolicyStore | None = None,
 ) -> Report:
     """Everything decidable about a scenario before the world is built.
 
@@ -381,8 +462,9 @@ def check_scenario(
 
         if profile.name not in checked:
             checked.add(profile.name)
-            report.extend(check_profile(profile, path=source.path).findings)
+            report.extend(check_profile(profile, path=source.path, store=store).findings)
 
+    _check_task_skill(scenario, participants, report)
     _check_twins(scenario, participants, report)
     report.extend(check_mujoco_world(scenario, located, path).findings)
 
@@ -411,6 +493,40 @@ def check_scenario(
                 )
             )
     return report
+
+
+def _check_task_skill(
+    scenario: Scenario,
+    participants: list[tuple[ScenarioRobot, RobotProfile]],
+    report: Report,
+) -> None:
+    """The skill a task asks for is looked up through the profile of the robot (ADR-0046).
+
+    Whether a robot runs it as code or as a policy is the profile's line; a robot
+    whose profile does not declare it has no such line to read. An obstacle is
+    asked for nothing.
+    """
+    if scenario.task is None:
+        return
+    skill = scenario.task.skill
+    for robot, profile in participants:
+        if robot.role is Role.STATIC or profile.skill(skill) is not None:
+            continue
+        declared = [binding.name for binding in profile.skills]
+        report.add(
+            error(
+                "scenario.skill_not_in_profile",
+                f"scenario:{scenario.name}.robots.{robot.id}",
+                f"задача просит навык {skill!r}, а профиль {profile.name!r} его не объявляет; "
+                f"объявлены: {', '.join(declared) or '—'}",
+                hint=(
+                    "навык задачи ищется через профиль: добавьте его в skills — именем из "
+                    "библиотеки или привязкой к политике"
+                ),
+                adr="ADR-0046",
+                detail={"skill": skill, "profile": profile.name, "declared": declared},
+            )
+        )
 
 
 def _check_twins(

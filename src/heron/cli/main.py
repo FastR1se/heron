@@ -24,7 +24,7 @@ from ..core.branding import APP_NAME, APP_TITLE, data_home, env_var, image_name,
 from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
 from ..core.enums import Severity
 from ..core.loading import LoadError, load_model, read_yaml
-from ..core.models import RobotProfile, Scenario
+from ..core.models import PolicyRef, RobotProfile, Scenario
 from ..core.plugins import PluginError, load
 from ..generators.bundle import build, build_profile
 from ..generators.common import Bundle, GeneratorError
@@ -34,8 +34,11 @@ from ..scenario.loader import load_scenario
 from ..sdk.runner import IncompatibleSkillError
 from ..sim.base import SimulationError
 from ..sim.process import PlanningLauncher, SubprocessLauncher
+from ..skills.learned import PolicyRuntimeError, check_network
 from ..skills.library import SkillLibrary, SkillNotFoundError
+from ..store.policies import ArtifactNotFoundError, PolicyArtifact, PolicyStore
 from ..validator.environment import check_environment
+from ..validator.policy import check_policy_against_profile
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
 from .new_robot import write_stub
@@ -54,18 +57,27 @@ profile_app = typer.Typer(help="Профили роботов.", no_args_is_help
 sim_app = typer.Typer(help="Симуляция: сборка мира и запуск сцены.", no_args_is_help=True)
 contract_app = typer.Typer(help="Контракты: идентичность и сверка.", no_args_is_help=True)
 skill_app = typer.Typer(help="Библиотека навыков.", no_args_is_help=True)
+policy_app = typer.Typer(
+    help="Обученные политики: артефакты хранилища (ADR-0046).", no_args_is_help=True
+)
 env_app = typer.Typer(
     help="Окружение машины: что нужно сторонам связи (ADR-0025).", no_args_is_help=True
 )
 app.add_typer(profile_app, name="profile")
 app.add_typer(contract_app, name="contract")
 app.add_typer(skill_app, name="skill")
+app.add_typer(policy_app, name="policy")
 app.add_typer(sim_app, name="sim")
 app.add_typer(env_app, name="env")
 
 RootsOption = Annotated[
     list[Path] | None,
     typer.Option("--registry", "-R", help="Каталог с профилями; можно повторять."),
+]
+
+StoreOption = Annotated[
+    Path | None,
+    typer.Option("--store", help="Корень хранилища артефактов; по умолчанию — из окружения."),
 ]
 
 
@@ -498,7 +510,7 @@ def profile_show(
     adapters = ", ".join(f"{k} -> {v.plugin}" for k, v in profile.adapters.items())
     typer.echo(f"  адаптеры     {adapters}")
     if profile.skills:
-        typer.echo(f"  навыки       {', '.join(profile.skills)}")
+        typer.echo(f"  навыки       {', '.join(str(item) for item in profile.skills)}")
     if profile.image:
         typer.echo(f"  образ        {image_name(profile.image)}")
 
@@ -606,14 +618,118 @@ def skill_check(
     profile: Annotated[str, typer.Argument(help="Имя профиля или путь к файлу.")],
     roots: RootsOption = None,
 ) -> None:
-    """Может ли робот выполнить навык: возможности, режим, требования."""
+    """Может ли робот выполнить навык: возможности, режим, требования.
+
+    Объявление берётся так же, как его возьмёт run: привязанный профилем навык
+    объявляет манифест его политики, остальные — библиотека (ADR-0046).
+    """
+    library = SkillLibrary()
     try:
-        spec = SkillLibrary().spec(skill)
         target = _load_profile_arg(profile, roots)
-    except (SkillNotFoundError, ProfileNotFoundError, LoadError) as exc:
+        spec = (
+            library.spec_for(target, skill)
+            if target.skill(skill) is not None
+            else library.spec(skill)
+        )
+    except (
+        SkillNotFoundError,
+        ProfileNotFoundError,
+        ArtifactNotFoundError,
+        LoadError,
+    ) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_UNREADABLE) from exc
     _finish(check_skill_against_profile(spec, target))
+
+
+# -- policy ----------------------------------------------------------------
+
+
+def _artifact(reference: str, store: Path | None) -> PolicyArtifact:
+    """The artifact a reference names, or exit 2: an input that cannot be read."""
+    try:
+        return PolicyStore(store).load(PolicyRef.parse(reference))
+    except (ValueError, ArtifactNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+
+
+@policy_app.command("show")
+def policy_show(
+    reference: Annotated[str, typer.Argument(help="Ссылка <имя>@<идентификатор>.")],
+    store: StoreOption = None,
+) -> None:
+    """Что лежит в артефакте: контракт, отображение действия, сеть, завершение."""
+    artifact = _artifact(reference, store)
+    manifest = artifact.manifest
+    contract = manifest.contract
+    action = contract.action
+    computed = manifest.ref()
+
+    typer.echo(f"{artifact.ref}")
+    typer.echo(f"  каталог      {artifact.directory}")
+    mark = "совпадает с каталогом" if computed == artifact.ref else f"НЕ совпадает: {computed}"
+    typer.echo(f"  артефакт     {computed.artifact_id}  ({mark})")
+    typer.echo(f"  контракт     {manifest.contract_id}  revision {contract.revision}")
+    typer.echo(f"  суставы      {contract.dof}: {', '.join(contract.joint_order)}")
+    typer.echo(f"  единицы      {contract.angle_unit}")
+    typer.echo(f"  частоты      состояние {contract.state_rate_hz:g} Гц, "
+               f"команды {contract.command_rate_hz:g} Гц")
+    if contract.default_pose is not None:
+        typer.echo(f"  поза отсчёта {', '.join(f'{v:g}' for v in contract.default_pose)}")
+    typer.echo(f"  наблюдение   {', '.join(f'{t.type}×{t.scale:g}' for t in contract.observation)}"
+               f"  ширина {contract.observation_size}")
+    typer.echo(f"  действие     {action.type}, clip {action.clip}, offset {action.offset}"
+               + (f", scale {action.scale}" if action.scale is not None else "")
+               + (", kp/kd заданы" if action.has_gains else ""))
+    typer.echo(f"  сеть         вход {manifest.onnx.input} [1, {manifest.onnx.observation_size}], "
+               f"выход {manifest.onnx.output} [1, {manifest.onnx.action_size}], "
+               f"opset {manifest.onnx.opset}")
+    typer.echo(f"               sha256 {manifest.onnx.sha256}")
+    typer.echo(f"  завершение   допуск {manifest.completion.tolerance:g}, "
+               f"выдержка {manifest.completion.hold_s:g} с, "
+               f"горизонт {manifest.completion.horizon_s:g} с")
+    typer.echo(f"  возможности  {', '.join(sorted(manifest.capabilities))}")
+    typer.echo(f"  режим        {manifest.control_mode}")
+    if manifest.requires:
+        typer.echo(f"  требования   {', '.join(f'{k} {v}' for k, v in manifest.requires.items())}")
+    conditions = artifact.train()
+    if conditions:
+        shown = ", ".join(
+            f"{key}={value}"
+            for key, value in sorted(conditions.items())
+            if isinstance(value, str | int | float | bool)
+        )
+        typer.echo(f"  обучение     {shown or f'{len(conditions)} записей'}")
+
+
+@policy_app.command("check")
+def policy_check(
+    reference: Annotated[str, typer.Argument(help="Ссылка <имя>@<идентификатор>.")],
+    profile: Annotated[str, typer.Argument(help="Имя профиля или путь к файлу.")],
+    store: StoreOption = None,
+    roots: RootsOption = None,
+) -> None:
+    """Может ли эта политика вести этого робота — всё, что проверяет run до подключения.
+
+    Артефакт против своего имени, контракт против профиля, исполнимость и
+    сигнатура сети (ADR-0046, ADR-0047).
+    """
+    artifact = _artifact(reference, store)
+    try:
+        target = _load_profile_arg(profile, roots)
+    except (ProfileNotFoundError, LoadError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(EXIT_UNREADABLE) from exc
+
+    report = check_policy_against_profile(artifact.manifest, target, artifact=artifact)
+    if report.ok:
+        try:
+            report = report.merged(check_network(artifact))
+        except PolicyRuntimeError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(EXIT_FOUND_ERRORS) from exc
+    _finish(report)
 
 
 if __name__ == "__main__":  # pragma: no cover

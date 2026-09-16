@@ -16,11 +16,27 @@ import pytest
 
 from heron.core.capabilities import Capability
 from heron.core.contract import ActionSpec, Contract, ObservationTerm
-from heron.core.enums import ActionType, AngleUnit, ControlMode, ObservationType
+from heron.core.enums import (
+    ActionOffset,
+    ActionType,
+    AngleUnit,
+    ControlMode,
+    ObservationType,
+)
 from heron.core.models import AdapterSpec, JointMax, JointRange, Limits, RobotProfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO_ROOT / "examples"
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """Temporary directories on the project's disk, not in the user profile (CLAUDE.md).
+
+    Before the temporary-path plugin reads the option; an explicit ``--basetemp`` wins.
+    """
+    if config.option.basetemp is None:
+        config.option.basetemp = str(REPO_ROOT / ".pytest-tmp")
 
 
 def make_contract(dof: int = 3, **overrides: Any) -> Contract:
@@ -40,6 +56,32 @@ def make_contract(dof: int = 3, **overrides: Any) -> Contract:
     return Contract(**fields)
 
 
+def make_policy_contract(dof: int = 3, **overrides: Any) -> Contract:
+    """A contract a policy could have been trained under (ADR-0041 - ADR-0043).
+
+    A reference pose, an observation carrying the goal, and an action mapped around
+    that pose: what ``LearnedSkill`` needs and what ``make_contract`` does not have,
+    because a coded skill needs none of it.
+    """
+    fields: dict[str, Any] = {
+        "default_pose": [0.1, -0.1, 0.2][:dof],
+        "observation": [
+            ObservationTerm(type=ObservationType.JOINT_POS_REL),
+            ObservationTerm(type=ObservationType.JOINT_VEL, scale=0.05),
+            ObservationTerm(type=ObservationType.TARGET_JOINT_POS),
+            ObservationTerm(type=ObservationType.PREVIOUS_ACTION),
+        ],
+        "action": ActionSpec(
+            type=ActionType.JOINT_POSITION,
+            clip=(-1.0, 1.0),
+            scale=[0.5] * dof,
+            offset=ActionOffset.DEFAULT_POSE,
+        ),
+    }
+    fields.update(overrides)
+    return make_contract(dof, **fields)
+
+
 def make_profile(name: str = "test_arm", dof: int = 3, **overrides: Any) -> RobotProfile:
     fields: dict[str, Any] = {
         "schema_version": 1,
@@ -53,6 +95,7 @@ def make_profile(name: str = "test_arm", dof: int = 3, **overrides: Any) -> Robo
             joint_velocity=JointMax(max=[1.5] * dof),
         ),
         "adapters": {"sim.dummy": AdapterSpec(plugin="dummy")},
+        "skills": ("hold", "move_joints"),
     }
     fields.update(overrides)
     return RobotProfile(**fields)

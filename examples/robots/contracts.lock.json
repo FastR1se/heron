@@ -1,8 +1,8 @@
 {
   "contracts": {
     "arm6": {
-      "contract_id": "ef25b68f705cab2f",
-      "revision": 1
+      "contract_id": "76698a60c6498d13",
+      "revision": 2
     },
     "rest_arm": {
       "contract_id": "6bfde5bd9f9c305b",

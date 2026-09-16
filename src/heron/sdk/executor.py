@@ -37,6 +37,7 @@ from ..core.models import RobotProfile, SkillSpec, Task
 from ..core.protocols import CommandRefusedError, ControlAdapter, Skill
 from ..core.types import Command, RobotState
 from ..skills.library import SkillLibrary
+from ..store.policies import PolicyStore
 from .runner import AdapterContext, IncompatibleSkillError, check_runnable
 
 WATCHDOG_PERIODS: Final = 10
@@ -169,20 +170,27 @@ class Executor:
         clock: Clock | None = None,
         library: SkillLibrary | None = None,
         recorder: Recorder | None = None,
+        store: PolicyStore | None = None,
     ) -> None:
         self.adapter = adapter
         self.profile = profile
         self.clock: Clock = clock if clock is not None else WallClock()
         self.library = library if library is not None else SkillLibrary()
         self.recorder = recorder
+        self.store = store
+        """Where a skill bound to a policy is looked for; the platform's store when unset."""
         self.period = 1.0 / profile.contract.command_rate_hz
         self.watchdog = watchdog_timeout(profile)
 
     # -- running ------------------------------------------------------------
 
     def run_task(self, task: Task) -> RunResult:
-        """One task: look the skill up by name, run it against its goal."""
-        skill = self.library.create(task.skill)
+        """One task: the skill as this robot's profile binds it, run against its goal.
+
+        Code or a policy -- the profile's ``skills`` says which, and nothing here asks
+        (invariant 4, ADR-0046). A skill the profile does not declare is refused.
+        """
+        skill = self.library.create_for(self.profile, task.skill, store=self.store)
         return self.run(skill, task.goal, name=task.skill)  # type: ignore[arg-type]
 
     def run_tasks(self, tasks: Sequence[Task]) -> list[RunResult]:

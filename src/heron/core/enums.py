@@ -54,12 +54,31 @@ class ObservationType(StrEnum):
     """
 
     JOINT_POS = "joint_pos"
+    JOINT_POS_REL = "joint_pos_rel"
+    """``q - default_pose``: the pose measured from the contract's reference (ADR-0042)."""
+
     JOINT_VEL = "joint_vel"
     JOINT_TORQUE = "joint_torque"
     BASE_LIN_VEL = "base_lin_vel"
     BASE_ANG_VEL = "base_ang_vel"
     BASE_ORIENTATION = "base_orientation"
     PREVIOUS_ACTION = "previous_action"
+    """The policy's output of the previous tick after ``clip``, before ``scale``."""
+
+    TARGET_JOINT_POS = "target_joint_pos"
+    """The goal as an absolute joint pose, ordered like ``joint_order`` (ADR-0042, ADR-0043)."""
+
+
+class ActionOffset(StrEnum):
+    """What a policy's scaled output is added to (ADR-0041).
+
+    A closed vocabulary rather than a flag: an action relative to the measured pose
+    would be a third member, not a change of the field's type.
+    """
+
+    ZERO = "zero"
+    DEFAULT_POSE = "default_pose"
+    """The contract's ``default_pose``, the same reference the observation uses."""
 
 
 class ActionType(StrEnum):

@@ -382,6 +382,8 @@ def _build_trajectory(built: Any, fields: Mapping[str, Any]) -> Any:
     for item in fields.get("points", []):
         point = point_class()
         point.positions = [float(v) for v in item.get("positions", [])]
+        if "velocities" in item:
+            point.velocities = [float(v) for v in item["velocities"]]
         seconds = float(item.get("time_from_start", 0.0))
         whole = int(seconds)
         point.time_from_start = duration_class(

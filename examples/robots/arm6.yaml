@@ -7,17 +7,40 @@ description:
   urdf: urdf/arm6.urdf
 
 contract:
-  revision: 1
+  # revision 2: поза отсчёта, отображение выхода политики и её наблюдение (ADR-0041,
+  # ADR-0042), коэффициенты привода (ADR-0045).
+  revision: 2
   joint_order: [joint0, joint1, joint2, joint3, joint4, joint5]
   angle_unit: rad
   state_rate_hz: 100
   command_rate_hz: 50
+  # Рабочая поза, не нули (ADR-0043): при нулях joint_pos_rel совпал бы с joint_pos, а смещение
+  # действия — с его отсутствием, и внесённое расхождение смещения в прогоне не проявилось бы.
+  default_pose: [0.0, -0.4, 0.8, 0.0, 0.6, 0.0]
   observation:
-    - {type: joint_pos, scale: 1.0}
+    - {type: joint_pos_rel, scale: 1.0}
     - {type: joint_vel, scale: 0.05}
+    - {type: target_joint_pos, scale: 1.0}
+    - {type: previous_action, scale: 1.0}
+  # Цель политики — clip(a) · scale + default_pose. Множество целей по суставам:
+  #   joint0 [-1, 1], joint1 [-1.4, 0.6], joint2 [-0.2, 1.8], joint3 [-1, 1], joint4 [-0.4, 1.6],
+  #   joint5 [-1, 1] — внутри рамки limits (contract.action_outside_limits), и в нём лежат и цель
+  #   сцены table, и нулевая поза, с которой робот появляется в мире.
+  #
+  # Закон привода tau = kp·(q* − q) − kd·dq на state_rate_hz в обоих мирах (ADR-0045). Числа —
+  # scripts/phase6-arm6-gains.py: наименьшая инерция подвижной части относительно оси сустава в
+  # рамке профиля (перебор последующих суставов), kd = I_min/dt, kp = I_min/(4·dt²). На самой
+  # лёгкой нагрузке — критическое демпфирование и половина запаса устойчивости дискретного PD
+  # (kd·dt/I < 2, kp·dt² < 2·kd·dt); тяжелее — только устойчивее, но демпфирование падает как
+  # √(I_min/I): у joint0 при вытянутой руке ζ ≈ 0.07.
+  #   I_min, кг·м²: 0.00576 0.112 0.234 0.00166 0.0233 0.00036
   action:
     type: joint_position
     clip: [-1.0, 1.0]
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    offset: default_pose
+    kp: [14.0, 280.0, 580.0, 4.1, 58.0, 0.9]
+    kd: [0.58, 11.0, 23.0, 0.17, 2.3, 0.036]
 
 capabilities: [arm.joint_position, arm.cartesian, gripper.binary]
 control_mode: streaming

@@ -367,17 +367,22 @@ class Ros2ControlAdapter:
     def _publication(self, profile: RobotProfile, values: tuple[float, ...]) -> Publication:
         """One command, as the message its controller subscribes to."""
         if self._command_message == names.TRAJECTORY_MESSAGE:
-            # The trajectory controller is told to reach the point in one
-            # command period: the rate is the contract's, so the platform is
-            # not inventing a duration, only restating one it was given.
+            point: dict[str, Any] = {"positions": [float(v) for v in values]}
+            if names.closes_through_gains(profile):
+                # The drive's law, tau = kp * (q* - q) - kd * dq, from the tick the
+                # point arrives: desired state (q*, 0) at once. A later time would
+                # interpolate a ramp, or hold the state at receipt for a whole
+                # period with no torque toward the target (ADR-0045).
+                point["velocities"] = [0.0] * len(values)
+                point["time_from_start"] = 0.0
+            else:
+                # The trajectory controller is told to reach the point in one
+                # command period: the rate is the contract's, so the platform is
+                # not inventing a duration, only restating one it was given.
+                point["time_from_start"] = 1.0 / profile.contract.command_rate_hz
             fields: dict[str, Any] = {
                 "joint_names": list(profile.contract.joint_order),
-                "points": [
-                    {
-                        "positions": [float(v) for v in values],
-                        "time_from_start": 1.0 / profile.contract.command_rate_hz,
-                    }
-                ],
+                "points": [point],
             }
         else:
             fields = {"data": [float(v) for v in values]}
