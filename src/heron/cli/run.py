@@ -28,7 +28,16 @@ from typing import Any
 from .. import __version__
 from ..core.enums import Role, Status
 from ..core.loading import LoadError
-from ..core.models import RobotProfile, Scenario, ScenarioRobot, Task, sim_backend_of, sim_target
+from ..core.models import (
+    REAL_TARGET,
+    SPEED_SCALE_PARAM,
+    RobotProfile,
+    Scenario,
+    ScenarioRobot,
+    Task,
+    sim_backend_of,
+    sim_target,
+)
 from ..core.plugins import PluginError, load
 from ..core.protocols import ControlAdapter
 from ..core.twins import TwinError, find_twin
@@ -43,7 +52,7 @@ from ..skills.library import SkillLibrary, SkillNotFoundError
 from ..store.policies import ArtifactNotFoundError, PolicyStore
 from ..validator.environment import Machine, check_adapter
 from ..validator.report import Report
-from ..validator.rules import check_scenario
+from ..validator.rules import check_real_target, check_scenario
 
 NAMESPACE_PARAM = "namespace"
 SHOWN_VALUE_WIDTH = 40
@@ -110,21 +119,31 @@ def choose_target(scenario: Scenario, profile: RobotProfile, wanted: str | None)
     return target
 
 
-def adapter_config(profile: RobotProfile, robot: ScenarioRobot, target: str) -> dict[str, Any]:
+def adapter_config(
+    profile: RobotProfile,
+    robot: ScenarioRobot,
+    target: str,
+    speed_scale: float | None = None,
+) -> dict[str, Any]:
     """Configuration handed to the adapter on connect.
 
     The namespace is the scenario identifier and comes from the scenario, not
     from the profile: two robots of one kind share a profile and must not share
     topics. The profile's own parameters are merged underneath, so a profile can
     state what belongs to the link and nothing it cannot know.
+
+    The speed scale is the run's, and is handed only to an adapter that declared it
+    executes one (ADR-0052).
     """
     config = dict(profile.adapters[target].params)
     config.setdefault(NAMESPACE_PARAM, robot.id)
+    if speed_scale is not None:
+        config[SPEED_SCALE_PARAM] = speed_scale
     return config
 
 
-def build_adapter(profile: RobotProfile, target: str) -> ControlAdapter:
-    """Load the adapter plugin the profile names for this target."""
+def adapter_class(profile: RobotProfile, target: str) -> Any:
+    """The adapter plugin the profile names for this target, not yet constructed."""
     plugin = profile.adapters[target].plugin
     try:
         factory = load("adapters", plugin)
@@ -134,7 +153,39 @@ def build_adapter(profile: RobotProfile, target: str) -> ControlAdapter:
         ) from exc
     if not callable(factory):
         raise RunError(f"{plugin!r}: точка входа не вызываема")
-    return factory()  # type: ignore[no-any-return]
+    return factory
+
+
+def build_adapter(profile: RobotProfile, target: str) -> ControlAdapter:
+    """Load the adapter plugin the profile names for this target."""
+    return adapter_class(profile, target)()  # type: ignore[no-any-return]
+
+
+def choose_speed_scale(target: str, wanted: float | None) -> float:
+    """The run's speed scale: stated on hardware every time, 1 in a simulator (ADR-0052)."""
+    if wanted is None:
+        if target == REAL_TARGET:
+            raise RunError(
+                f"цель {REAL_TARGET!r}: шкала скорости обязательна, умолчания нет — "
+                f"--speed-scale s, 0 < s ≤ 1; первый прогон на железе замедлен (раздел 12, "
+                f"ADR-0052). Полная скорость пишется явно: --speed-scale 1"
+            )
+        return 1.0
+    if not 0 < wanted <= 1:
+        raise RunError(f"--speed-scale {wanted:g}: нужно 0 < s ≤ 1 (ADR-0052)")
+    return wanted
+
+
+def refuse_undeclared_scale(plugin: str, factory: Any, scale: float) -> bool:
+    """Whether the adapter executes the scale; refused when it is not 1 and it does not."""
+    declared = getattr(factory, "supports_speed_scale", None)
+    if scale != 1 and declared is not True:
+        raise RunError(
+            f"адаптер {plugin!r} не исполняет шкалу скорости (supports_speed_scale = "
+            f"{declared!r}), а прогон просит {scale:g}. Связь, не умеющая замедлить робота, "
+            f"шкалу не получает — прогон отменён (ADR-0052)"
+        )
+    return declared is True
 
 
 def task_of(scenario: Scenario, skill: str | None, goal: dict[str, Any]) -> Task:
@@ -178,6 +229,7 @@ def plan(
     profile: RobotProfile,
     target: str,
     task: Task,
+    speed_scale: float = 1.0,
 ) -> list[str]:
     """What the run will do, in lines, before it does any of it.
 
@@ -193,8 +245,14 @@ def plan(
     """
     binding = profile.skill(task.skill)
     made_of = f" -> политика {binding.policy}" if binding is not None and binding.policy else ""
+    world = (
+        "мир       действительность, окружение мира не применяется"
+        if target == REAL_TARGET
+        else f"мир       {scenario.world.backend}  (владелец физики)"
+    )
     lines = [
-        f"сцена     {scenario.name}  (владелец физики {scenario.world.backend})",
+        f"сцена     {scenario.name}",
+        world,
         f"робот     {robot.id}  профиль {profile.name}  роль {robot.role}",
         f"связь     {target} -> {profile.adapters[target].plugin}",
         f"контракт  {profile.contract.contract_id}  revision {profile.contract.revision}",
@@ -202,6 +260,7 @@ def plan(
         + (f"  цель {task.goal}" if task.goal else ""),
         f"темп      команды {profile.contract.command_rate_hz:g} Гц, "
         f"состояние {profile.contract.state_rate_hz:g} Гц",
+        f"шкала     скорости {speed_scale:g}",
     ]
     plane = control_plane(robot, profile, target)
     if plane is not None and plane.get("command_topic") is not None:
@@ -227,7 +286,12 @@ def describe_environment(world: Mapping[str, str]) -> str:
 
 
 def record_metadata(
-    scenario: Scenario, robot: ScenarioRobot, profile: RobotProfile, target: str, task: Task
+    scenario: Scenario,
+    robot: ScenarioRobot,
+    profile: RobotProfile,
+    target: str,
+    task: Task,
+    speed_scale: float = 1.0,
 ) -> dict[str, str]:
     """What a record says about its run before the first tick (ADR-0038)."""
     contract = profile.contract
@@ -237,6 +301,7 @@ def record_metadata(
         "robot": robot.id,
         "profile": profile.name,
         "target": target,
+        "speed_scale": f"{speed_scale:g}",
         "adapter": profile.adapters[target].plugin,
         "contract_id": contract.contract_id,
         "revision": str(contract.revision),
@@ -264,6 +329,7 @@ def execute(
     scenario_path: Path | None = None,
     record: Path | None = None,
     environ: MutableMapping[str, str] | None = None,
+    speed_scale: float | None = None,
 ) -> tuple[list[str], RunResult | None]:
     """Set the run up, then run it. Returns the plan it printed and the result.
 
@@ -275,6 +341,11 @@ def execute(
 
     ``environ`` is the environment of this process, the one the world's is applied
     to (ADR-0039); ``record`` is where the run is written as it happens (ADR-0038).
+
+    The target chooses who owns the physics (ADR-0051): ``sim.<backend>`` is the
+    scenario's world, ``real`` is reality -- the scenario is still checked whole, the
+    world's environment is not applied, and the envelope must be declared.
+    ``speed_scale`` is the run's (ADR-0052): required on ``real``, 1 elsewhere.
     """
     process = os.environ if environ is None else environ
     skills = library if library is not None else SkillLibrary()
@@ -289,8 +360,14 @@ def execute(
     robot = choose_robot(scenario, robot_id)
     profile = registry.load(robot.profile)
     chosen = choose_target(scenario, profile, target)
+    on_hardware = chosen == REAL_TARGET
+    if on_hardware:
+        envelope = check_real_target(profile)
+        if not envelope.ok:
+            raise RunError(f"{robot.id}: на железо не идёт (раздел 12):", envelope)
+    scale = choose_speed_scale(chosen, speed_scale)
     task = task_of(scenario, skill, dict(goal or {}))
-    lines = plan(scenario, robot, profile, chosen, task)
+    lines = plan(scenario, robot, profile, chosen, task, scale)
 
     # The declaration of the skill as this robot runs it: from the library, or from the
     # manifest of the policy the profile binds it to (ADR-0046). An artifact this machine
@@ -304,7 +381,9 @@ def execute(
     except (SkillNotFoundError, LoadError) as exc:
         raise RunError(str(exc)) from exc
     try:
-        world = world_environment(scenario, registry)
+        # Reality is not the scenario's world: its environment would lead the link to
+        # a real robot into the simulator's domain (ADR-0051).
+        world = {} if on_hardware else world_environment(scenario, registry)
     except GeneratorError as exc:
         if not dry_run:
             raise RunError(
@@ -363,9 +442,11 @@ def execute(
             environment.report,
         )
 
-    adapter = build_adapter(profile, chosen)
+    factory = adapter_class(profile, chosen)
+    handed = scale if refuse_undeclared_scale(plugin, factory, scale) else None
+    adapter: ControlAdapter = factory()
     try:
-        adapter.connect(profile, adapter_config(profile, robot, chosen))
+        adapter.connect(profile, adapter_config(profile, robot, chosen, handed))
     except (RuntimeError, ImportError) as exc:
         # A link that cannot be established is a setup failure by definition,
         # and this command reports setup failures instead of unwinding: the
@@ -376,7 +457,9 @@ def execute(
             f"{robot.id}: связь {chosen!r} не установлена — {exc}"
         ) from exc
     try:
-        recorder = _open_record(record, record_metadata(scenario, robot, profile, chosen, task))
+        recorder = _open_record(
+            record, record_metadata(scenario, robot, profile, chosen, task, scale)
+        )
         result: RunResult | None = None
         try:
             result = Executor(

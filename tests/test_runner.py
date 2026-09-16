@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import make_profile
+from conftest import make_command_profile, make_profile
 from heron.adapters.dummy import DummyAdapter
 from heron.core.capabilities import Capability
-from heron.core.enums import ActionType, ControlMode, Status
+from heron.core.enums import ActionType, Status
 from heron.sdk.executor import run_skill
 from heron.sdk.runner import IncompatibleSkillError, check_runnable
 from heron.skills.hold import HoldSkill
@@ -33,7 +33,7 @@ def test_hold_runs_to_success() -> None:
 
 def test_skill_refuses_a_robot_it_cannot_drive() -> None:
     """Invariant 6: a stop before the first tick, not a failure mid-motion."""
-    profile = make_profile(control_mode=ControlMode.COMMAND)
+    profile = make_command_profile()
     adapter = DummyAdapter()
     adapter.connect(profile, {})
 

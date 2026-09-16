@@ -18,12 +18,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.capabilities import Capability
-from ..core.enums import ControlMode
 from ..core.models import RobotProfile, SkillSpec
 from ..core.protocols import ControlAdapter, Skill
 from ..core.types import Command
 from ..validator.report import Report, error
-from ..validator.rules import check_skill_against_profile
+from ..validator.rules import CONTROL_MODE_MISMATCH, ROBOT_ACCEPTS, check_skill_against_profile
 
 
 class IncompatibleSkillError(RuntimeError):
@@ -100,8 +99,8 @@ def check_runnable(skill: Skill, profile: RobotProfile, adapter: ControlAdapter)
     report = check_skill_against_profile(spec, profile)
     where = f"skill:{spec.name} -> adapter"
 
-    link: frozenset[Capability] = adapter.capabilities()
-    absent = spec.required_capabilities - link
+    offered: frozenset[Capability] = adapter.capabilities()
+    absent = spec.required_capabilities - offered
     if absent:
         report.add(
             error(
@@ -114,16 +113,17 @@ def check_runnable(skill: Skill, profile: RobotProfile, adapter: ControlAdapter)
             )
         )
 
-    if (
-        spec.required_control_mode is ControlMode.STREAMING
-        and adapter.control_mode() is ControlMode.COMMAND
-    ):
+    link = adapter.control_mode()
+    if spec.required_control_mode is not link:
+        message, hint = CONTROL_MODE_MISMATCH[spec.required_control_mode]
         report.add(
             error(
                 "adapter.control_mode_incompatible",
                 where,
-                "навык требует потокового управления, связь принимает команды целиком",
-                adr="раздел 3",
+                f"{message}, связь {ROBOT_ACCEPTS[link]}",
+                hint=hint,
+                adr="раздел 3, ADR-0049",
+                detail={"required": str(spec.required_control_mode), "actual": str(link)},
             )
         )
     return report

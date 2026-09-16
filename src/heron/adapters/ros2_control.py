@@ -117,6 +117,9 @@ class Ros2ControlAdapter:
 
     requirements: Sequence[Requirement] = REQUIREMENTS
 
+    supports_speed_scale: bool = False
+    """A stream is planned by the skill or the policy; the link cannot slow it (ADR-0052)."""
+
     def __init__(self, transport: Transport | None = None) -> None:
         self._transport = transport
         self._owns_transport = transport is None

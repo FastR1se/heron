@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import make_profile
+from conftest import make_command_profile, make_profile
 from heron.adapters.dummy import DummyAdapter
 from heron.core.enums import ActionType, ControlMode, Status
 from heron.core.models import JointRange, Limits, RobotProfile, Task
@@ -315,7 +315,7 @@ def test_commands_the_skill_sent_are_kept() -> None:
 
 
 def test_an_incompatible_skill_never_reaches_the_first_tick() -> None:
-    profile = make_profile(control_mode=ControlMode.COMMAND)
+    profile = make_command_profile()
     adapter = DummyAdapter()
     adapter.connect(profile, {})
 

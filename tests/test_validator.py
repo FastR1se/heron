@@ -162,13 +162,17 @@ def test_streaming_skill_rejected_on_command_robot() -> None:
     assert "skill.control_mode_incompatible" in report.codes()
 
 
-def test_command_skill_runs_on_streaming_robot() -> None:
+def test_command_skill_rejected_on_streaming_robot() -> None:
+    """Modes compare by equality: one goal on a stream is a step (ADR-0049)."""
     skill = SkillSpec(
         name="pick",
         required_capabilities=frozenset({Capability("arm.joint_position")}),
         required_control_mode=ControlMode.COMMAND,
     )
-    assert check_skill_against_profile(skill, make_profile()).ok
+    report = check_skill_against_profile(skill, make_profile())
+    assert [(item.code, item.detail) for item in report.errors] == [
+        ("skill.control_mode_incompatible", {"required": "command", "actual": "streaming"})
+    ]
 
 
 def test_quantitative_requirement_unmet() -> None:

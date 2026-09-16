@@ -101,11 +101,14 @@ def test_silent_contract_change_fails_validation(tmp_path: Path, profile_file: P
     assert "contract.undeclared_change" in result.stdout
 
 
-def test_profile_new_creates_a_validating_stub(tmp_path: Path) -> None:
-    assert runner.invoke(app, ["profile", "new", "my_bot", "--into", str(tmp_path)]).exit_code == 0
+@pytest.mark.parametrize("mode", ["streaming", "command"])
+def test_profile_new_creates_a_validating_stub(tmp_path: Path, mode: str) -> None:
+    args = ["profile", "new", "my_bot", "--into", str(tmp_path), "--control-mode", mode]
+    assert runner.invoke(app, args).exit_code == 0
     stub = tmp_path / "my_bot" / "profile.yaml"
     assert stub.is_file()
-    assert (tmp_path / "my_bot" / "adapter.py").is_file()
+    assert (tmp_path / "my_bot" / "src" / "my_bot" / "adapter.py").is_file()
+    assert f"control_mode: {mode}" in stub.read_text(encoding="utf-8")
     assert runner.invoke(app, ["validate", str(stub)]).exit_code == EXIT_OK
 
 

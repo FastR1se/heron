@@ -1,62 +1,44 @@
-"""The contract tests every adapter must pass (ARCHITECTURE.md, section 13).
+"""The platform's own adapters, held to the public contract suite (ADR-0056).
 
-"Each adapter is run through a shared set of checks" -- this is that set. It is
-written against the protocol, not against ``DummyAdapter``, so a vendor adapter
-can be added to ``HARNESSES`` and be held to the same standard. Phase 1 left the
-list with one entry and claimed the second would cost nothing; phase 3 added it,
-and it did.
+The suite itself is ``testing.adapter_contract``, shipped with the platform so that
+a robot package runs it from its own tests. Only the built-in adapters are listed
+here: a vendor's package is not the platform's to enumerate, and the G1 package
+holds itself to the suite the way any user's package would.
 
 The entries are not alike, and that is the point of the set. One is a robot made
-of numbers with no outside at all; one talks to a robot over ROS 2 topics behind a
-transport that carries nothing (ADR-0014); one is a vendor's package, installed
-beside the platform, talking DDS to a G1 over a channel that carries nothing
-(ADR-0029). The checks below know about none of them -- they ask only what the
-protocol promises.
-
-A harness says what the protocol cannot: which robot this adapter drives, what
-link configuration it needs, and how a running world would give it something to
-read. The vendor's harness comes from its package, which builds its adapter the
-way it builds it for its own tests.
+of numbers streaming, the same robot planning its own motions, and one talks to a
+robot over ROS 2 topics behind a transport that carries nothing (ADR-0014).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
-from conftest import EXAMPLES, make_profile
-from heron.adapters.dummy import DummyAdapter, NotConnectedError, SafetyViolationError
+from conftest import make_command_profile, make_profile
+from heron.adapters.dummy import (
+    DummyAdapter,
+    LinkConfigurationError,
+    MotionInProgressError,
+    NotConnectedError,
+    SafetyViolationError,
+    Trapezoid,
+)
 from heron.adapters.ros2_control import Ros2ControlAdapter
 from heron.core.capabilities import Capability
-from heron.core.enums import ActionType, ControlMode
-from heron.core.models import RobotProfile
-from heron.core.plugins import load
-from heron.core.protocols import CommandRefusedError, ControlAdapter
+from heron.core.enums import ActionType, MotionPhase
+from heron.core.models import JointMax, Limits, RobotProfile
+from heron.core.protocols import ControlAdapter
 from heron.core.types import Command
 from heron.ros2 import names
 from heron.ros2.transport import RecordingTransport
+from heron.testing.adapter_contract import AdapterContract, Harness
 
 STATES = 32
-"""Readings queued for a link-based adapter, enough for any check below."""
+"""Readings queued for a link-based adapter, enough for any check of the suite."""
 
-VENDOR_PACKAGE = EXAMPLES / "plugins" / "unitree_g1"
-
-
-@dataclass(frozen=True)
-class Harness:
-    """One adapter, as the shared checks need it."""
-
-    plugin: str
-    """Entry-point name, exactly as a profile writes it."""
-
-    make: Callable[[], ControlAdapter]
-    profile: Callable[[], RobotProfile]
-    config: dict[str, Any] = field(default_factory=dict)
-    prime: Callable[[Any, RobotProfile], None] = lambda adapter, profile: None
-    """Give the adapter something to read, before it connects, as a running world would."""
+MAX_READINGS = 10_000
 
 
 def _over_topics() -> ControlAdapter:
@@ -78,125 +60,28 @@ def _prime_topics(adapter: Any, profile: RobotProfile) -> None:
         )
 
 
-def _vendor_harnesses() -> list[Harness]:
-    """The robot packages in ``examples/plugins``, which must be installed to be held.
-
-    A package that is present and not installed fails collection rather than
-    skipping: a contract suite that is green because its subject is missing
-    proves nothing, and nobody would notice it had stopped running.
-    """
-    if not VENDOR_PACKAGE.is_dir():
-        return []
-    try:
-        from unitree_g1 import testing
-    except ImportError as exc:
-        raise ImportError(
-            f"пакет робота {VENDOR_PACKAGE.name} лежит в examples/plugins, но не установлен, "
-            f"и общий набор адаптеров его не проверит: uv pip install -e {VENDOR_PACKAGE}"
-        ) from exc
-    return [
-        Harness(
-            plugin=testing.PLUGIN,
-            make=testing.recording_adapter,
-            profile=testing.profile_23dof,
-            config=dict(testing.LINK_PARAMS),
-            prime=testing.prime,
-        )
-    ]
+def _until_idle(adapter: Any, profile: RobotProfile) -> None:
+    """A robot made of numbers ends its motion by itself; read until it has."""
+    for _ in range(MAX_READINGS):
+        if adapter.read_state().motion is MotionPhase.IDLE:
+            return
+    raise AssertionError(f"движение не закончилось за {MAX_READINGS} показаний")
 
 
-HARNESSES: list[Harness] = [
-    Harness(plugin="dummy", make=DummyAdapter, profile=make_profile),
-    Harness(plugin="ros2_control", make=_over_topics, profile=make_profile, prime=_prime_topics),
-    *_vendor_harnesses(),
-]
+class TestDummyAdapter(AdapterContract):
+    harness = Harness(plugin="dummy", make=DummyAdapter, profile=make_profile)
 
 
-@pytest.fixture(params=HARNESSES, ids=lambda harness: harness.plugin)
-def harness(request: pytest.FixtureRequest) -> Harness:
-    return request.param  # type: ignore[no-any-return]
+class TestDummyCommandAdapter(AdapterContract):
+    harness = Harness(
+        plugin="dummy", make=DummyAdapter, profile=make_command_profile, finish=_until_idle
+    )
 
 
-@pytest.fixture
-def adapter(harness: Harness) -> ControlAdapter:
-    return harness.make()
-
-
-@pytest.fixture
-def robot(harness: Harness) -> RobotProfile:
-    return harness.profile()
-
-
-@pytest.fixture
-def connected(harness: Harness, adapter: ControlAdapter, robot: RobotProfile) -> ControlAdapter:
-    harness.prime(adapter, robot)
-    adapter.connect(robot, dict(harness.config))
-    return adapter
-
-
-def _position(robot: RobotProfile, first: float = 0.0) -> Command:
-    values = (first, *(0.0,) * (robot.contract.dof - 1))
-    return Command(type=ActionType.JOINT_POSITION, values=values)
-
-
-# -- the shared contract ---------------------------------------------------
-
-
-def test_satisfies_the_protocol(adapter: ControlAdapter) -> None:
-    assert isinstance(adapter, ControlAdapter)
-
-
-def test_is_found_through_its_entry_point(harness: Harness, adapter: ControlAdapter) -> None:
-    """The platform has no private path to any adapter, its own or a vendor's."""
-    assert type(adapter) is load("adapters", harness.plugin)
-
-
-def test_declares_capabilities(connected: ControlAdapter) -> None:
-    caps = connected.capabilities()
-    assert caps
-    assert all(isinstance(c, Capability) for c in caps)
-
-
-def test_declares_control_mode(connected: ControlAdapter) -> None:
-    assert isinstance(connected.control_mode(), ControlMode)
-
-
-def test_state_width_matches_contract(connected: ControlAdapter, robot: RobotProfile) -> None:
-    state = connected.read_state()
-    assert len(state.joint_position) == robot.contract.dof
-    assert len(state.joint_velocity) == robot.contract.dof
-
-
-def test_clock_advances(connected: ControlAdapter) -> None:
-    first = connected.read_state().timestamp
-    second = connected.read_state().timestamp
-    assert second > first
-
-
-def test_emergency_stop_exists_and_stops(connected: ControlAdapter, robot: RobotProfile) -> None:
-    """Section 12 makes it mandatory; an adapter without it is not deployable."""
-    connected.emergency_stop()
-    with pytest.raises(CommandRefusedError):
-        connected.send_command(_position(robot))
-
-
-def test_a_command_outside_the_envelope_is_refused_by_name(
-    connected: ControlAdapter, robot: RobotProfile
-) -> None:
-    """The refusal the executor can tell from a defect, naming what it refused (ADR-0026)."""
-    with pytest.raises(CommandRefusedError, match=f"{robot.contract.joint_order[0]} = 99"):
-        connected.send_command(_position(robot, first=99.0))
-
-
-def test_refuses_use_before_connect(adapter: ControlAdapter) -> None:
-    with pytest.raises(RuntimeError):
-        adapter.read_state()
-
-
-def test_safety_limits_come_from_the_profile(
-    connected: ControlAdapter, robot: RobotProfile
-) -> None:
-    assert connected.safety_limits() == robot.limits
+class TestRos2ControlAdapter(AdapterContract):
+    harness = Harness(
+        plugin="ros2_control", make=_over_topics, profile=make_profile, prime=_prime_topics
+    )
 
 
 # -- dummy-specific behaviour ----------------------------------------------
@@ -262,7 +147,7 @@ def test_disconnect_makes_the_adapter_unusable() -> None:
 
 def test_limits_wider_than_the_contract_are_refused() -> None:
     """The validator catches this; the adapter must not index past the end."""
-    from heron.core.models import JointRange, Limits
+    from heron.core.models import JointRange
 
     adapter = DummyAdapter()
     profile = make_profile(
@@ -270,3 +155,123 @@ def test_limits_wider_than_the_contract_are_refused() -> None:
     )
     with pytest.raises(ValueError, match="лимиты"):
         adapter.connect(profile, {})
+
+
+# -- dummy in the command class (ADR-0049, ADR-0052) ------------------------
+
+
+def _command_link(scale: float = 1.0, **overrides: Any) -> tuple[DummyAdapter, RobotProfile]:
+    adapter = DummyAdapter()
+    profile = make_command_profile(**overrides)
+    adapter.connect(profile, {"speed_scale": scale})
+    return adapter, profile
+
+
+def _goal(*values: float) -> Command:
+    return Command(type=ActionType.JOINT_POSITION, values=values)
+
+
+def _motion_time(adapter: DummyAdapter) -> float:
+    started = adapter.time
+    _until_idle(adapter, make_command_profile())
+    return adapter.time - started
+
+
+@pytest.mark.parametrize(
+    ("distance", "duration"),
+    [
+        (0.0, 0.0),
+        (0.25, 2 * 0.125**0.5),  # a triangle: peak sqrt(0.5) below the speed
+        (2.0, 2.5),  # a trapezoid: two ramps of 0.5 and 1.5 at the speed
+        (-2.0, 2.5),
+    ],
+)
+def test_a_trapezoid_takes_the_time_its_bounds_allow(distance: float, duration: float) -> None:
+    joint = Trapezoid(distance, speed=1.0, acceleration=2.0)
+    assert joint.duration == pytest.approx(duration)
+    assert joint.at(joint.duration) == (pytest.approx(distance), 0.0)
+    assert abs(joint.at(joint.duration / 2)[1]) <= 1.0 + 1e-12
+
+
+def test_a_command_link_moves_along_its_bounds_and_arrives() -> None:
+    adapter, _ = _command_link()
+    adapter.send_command(_goal(2.0, 0.0, -1.0))
+    speeds = []
+    while (state := adapter.read_state()).motion is not MotionPhase.IDLE:
+        speeds.append(max(abs(v) for v in state.joint_velocity))
+    assert max(speeds) <= 1.0 + 1e-9
+    assert state.joint_position == pytest.approx((2.0, 0.0, -1.0))
+    assert state.timestamp == pytest.approx(2.5, abs=0.05 + 1e-9)
+
+
+@pytest.mark.parametrize("distance", [2.0, 0.25], ids=["trapezoid", "triangle"])
+def test_the_speed_scale_stretches_the_motion_by_its_inverse(distance: float) -> None:
+    """Velocity times s, acceleration times s squared: 1/s as long, ramp or not (ADR-0057)."""
+    full, _ = _command_link()
+    full.send_command(_goal(distance, 0.0, 0.0))
+    slow, _ = _command_link(scale=0.5)
+    slow.send_command(_goal(distance, 0.0, 0.0))
+    # Each time is read to one state period (20 Hz), the doubled one to two.
+    assert _motion_time(slow) == pytest.approx(2 * _motion_time(full), abs=0.15)
+
+
+def test_a_second_command_during_a_motion_is_refused_and_later_accepted() -> None:
+    adapter, _ = _command_link()
+    adapter.send_command(_goal(0.5, 0.0, 0.0))
+    with pytest.raises(MotionInProgressError):
+        adapter.send_command(_goal(0.0, 0.0, 0.0))
+    _until_idle(adapter, make_command_profile())
+    adapter.send_command(_goal(0.0, 0.0, 0.0))
+
+
+def test_an_emergency_stop_halts_the_motion_where_it_is() -> None:
+    adapter, _ = _command_link()
+    adapter.send_command(_goal(2.0, 0.0, 0.0))
+    for _ in range(10):
+        adapter.read_state()
+    adapter.emergency_stop()
+    first, second = adapter.read_state(), adapter.read_state()
+    assert first.motion is second.motion is MotionPhase.HALTED
+    assert first.joint_position == second.joint_position != (2.0, 0.0, 0.0)
+    adapter.reset()
+    assert adapter.read_state().motion is MotionPhase.IDLE
+
+
+def test_disconnect_revokes_the_motion() -> None:
+    adapter, profile = _command_link()
+    adapter.send_command(_goal(2.0, 0.0, 0.0))
+    adapter.disconnect()
+    adapter.connect(profile, {})
+    assert adapter.read_state().motion is MotionPhase.IDLE
+
+
+@pytest.mark.parametrize("missing", ["joint_velocity", "joint_acceleration"])
+def test_a_command_link_without_motion_bounds_refuses_to_connect(missing: str) -> None:
+    limits = make_command_profile().limits.model_copy(update={missing: None})
+    with pytest.raises(LinkConfigurationError, match=missing):
+        _command_link(limits=limits)
+
+
+def test_a_stream_is_not_slowed() -> None:
+    with pytest.raises(LinkConfigurationError, match="потоковую"):
+        DummyAdapter().connect(make_profile(), {"speed_scale": 0.5})
+
+
+@pytest.mark.parametrize("scale", [0.0, -0.1, 1.5])
+def test_a_speed_scale_outside_its_range_is_refused(scale: float) -> None:
+    with pytest.raises(LinkConfigurationError, match="0 < s"):
+        _command_link(scale=scale)
+
+
+def test_a_stream_reports_no_motion_phase() -> None:
+    adapter = DummyAdapter()
+    adapter.connect(make_profile(), {})
+    assert adapter.read_state().motion is None
+
+
+def test_acceleration_limits_wider_than_the_contract_are_refused() -> None:
+    limits = make_command_profile().limits.model_copy(
+        update={"joint_acceleration": JointMax(max=[1.0])}
+    )
+    with pytest.raises(ValueError, match="лимиты"):
+        _command_link(limits=limits)

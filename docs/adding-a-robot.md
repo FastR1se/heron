@@ -113,14 +113,28 @@ xacro robot.urdf.xacro > robot.urdf
 ## Шаг 2. Заготовка
 
 ```bash
-heron profile new my_robot --into examples/robots
+heron profile new my_robot --into examples/robots                         # поток команд
+heron profile new my_robot --into examples/robots --control-mode command  # «выполни движение»
 ```
 
 ```
 examples/robots/my_robot/
-├── profile.yaml            # данные: контракт, возможности, лимиты, адаптеры
-├── adapter.py              # скелет ControlAdapter со всеми методами протокола
-└── urdf/my_robot.urdf      # скелет описания — дальше это ваш входной файл
+├── profile.yaml                    # данные: контракт, возможности, лимиты, адаптеры
+├── pyproject.toml                  # пакет: точка входа адаптера, группа test
+├── src/my_robot/adapter.py         # скелет ControlAdapter: все методы протокола и обязанности класса — TODO
+├── src/my_robot/testing.py         # обвязка: адаптер на записывающем канале, показания робота
+├── tests/test_my_robot_adapter.py  # общий контрактный набор платформы, наследованием
+└── urdf/my_robot.urdf              # скелет описания — дальше это ваш входной файл
+```
+
+Адаптер сразу пакет: иначе платформа его не найдёт — у неё нет частного пути ни к
+одному адаптеру ([ADR-0056](decisions/0056-the-adapter-contract-suite-is-public.md)).
+Поставьте пакет и прогоните набор — он красный, пока TODO не сделаны, и каждая
+неудача называет свой:
+
+```bash
+pip install -e examples/robots/my_robot[test]
+pytest examples/robots/my_robot/tests
 ```
 
 Скелет описания — стартовый **вход**, а не выход генератора: платформа его
@@ -210,7 +224,12 @@ control_mode: streaming    # или command
   (`ros2_control`, вендорский DDS-SDK). Обученные политики работают только так.
 - `command` — робот принимает «выполни это движение» и сообщает о завершении
   (сетевой API). Политика с циклом 50 Гц здесь неисполнима, и валидатор
-  отклонит такой навык до запуска.
+  отклонит такой навык до запуска. Навык этого класса — `goto_joints`: одна
+  команда-цель и допуск прибытия; фазу движения (`idle`, `moving`, `halted`)
+  сообщает адаптер ([ADR-0049](decisions/0049-command-class-skill-and-motion-phase.md)).
+
+Режимы сравниваются равенством, в обе стороны: `goto_joints` на потоковом роботе
+так же отклоняется, как `move_joints` на командном.
 
 Отсюда же выбирается класс контроллера: `streaming` даёт групповой контроллер,
 `command` — траекторный.
@@ -221,6 +240,7 @@ control_mode: streaming    # или command
 limits:
   joint_position: {min: [...], max: [...]}    # длина = число суставов контракта
   joint_velocity: {max: [...]}
+  joint_acceleration: {max: [...]}             # командный класс: по нему контроллер строит движение
   cartesian_velocity_max: 0.25
   gripper_width_max: 0.08
 ```
@@ -233,6 +253,13 @@ limits:
 Единицы — те, что объявлены в `angle_unit`. Если контракт в градусах, лимиты
 тоже в градусах; при сверке с описанием платформа переведёт сама.
 
+Прогон на железе (`run --target real`) без `joint_position` или `joint_velocity`
+не начнётся — `real.limits_missing`
+([ADR-0051](decisions/0051-a-real-run-is-chosen-by-target.md)). Шкала скорости
+прогона обязательна там же: `--speed-scale 0.1`
+([ADR-0052](decisions/0052-speed-scale-is-a-run-quantity.md),
+[ADR-0057](decisions/0057-speed-scale-squares-the-acceleration.md)).
+
 ### Адаптеры
 
 ```yaml
@@ -242,7 +269,7 @@ adapters:
   sim.dummy:
     plugin: dummy
   real:
-    plugin: my_package.adapter:MyRobotAdapter
+    plugin: my_robot                    # точка входа пакета из заготовки
     params: {host: "http://10.10.10.20:8081"}
 ```
 
@@ -251,8 +278,8 @@ adapters:
 ([ADR-0002](decisions/0002-single-physics-authority.md)).
 
 `plugin` — либо имя точки входа установленного пакета, либо путь
-`модуль:Класс` для плагина, который лежит на машине, но ещё не упакован. Именно
-так выглядит свежесгенерированный `adapter.py`.
+`модуль:Класс` для плагина, который лежит на машине, но ещё не упакован. Заготовка
+пишет первое: её адаптер — пакет с точкой входа.
 
 **Инвариант 3 живёт здесь:** между симуляцией и железом меняется только этот
 блок. Тот же образ, тот же навык, та же миссия.
@@ -449,9 +476,23 @@ my_robot_gazebo = "my_robot.bridge:MyRobotGazeboTwin"
 | отказ в команде — `CommandRefusedError`, ничего не отправлено | исполнитель сначала остановит робота ([ADR-0026](decisions/0026-refused-command-stops-the-robot.md)) | позиция вне рамки профиля |
 | `emergency_stop` не зависит от свежести состояния | его вызывает сторожевой таймер именно тогда, когда состояния нет | демпфирование, `kp = 0` |
 | конфигурация связи — в `params` профиля | между двойником и железом меняется только она (инвариант 3) | `domain`, `interface`, `peers` |
+| `supports_speed_scale` на классе | `run` не отдаст шкалу связи, которая её не исполнит ([ADR-0052](decisions/0052-speed-scale-is-a-run-quantity.md)) | `False`: поток не замедлить |
 
-Общий контрактный набор `tests/test_adapter_contract.py` принимает адаптер пакета
-через обвязку `Harness`: как построить адаптер, какой профиль, как подать показания.
+Общий контрактный набор — модуль платформы `testing.adapter_contract`. Пакет
+прогоняет его из **своих** тестов, наследуя `AdapterContract` со своей обвязкой
+`Harness`: как построить адаптер, какой профиль, как подать показания, а для
+командного класса — как робот сообщает конец движения (`finish`). Тесты платформы
+пакетов не перечисляют ([ADR-0056](decisions/0056-the-adapter-contract-suite-is-public.md)):
+
+```python
+from unitree_g1 import testing
+from heron.testing.adapter_contract import AdapterContract, Harness
+
+class TestG1DdsAdapter(AdapterContract):
+    harness = Harness(plugin=testing.PLUGIN, make=testing.recording_adapter,
+                      profile=testing.profile_23dof, config=dict(testing.LINK_PARAMS),
+                      prime=testing.prime)
+```
 
 ### Двойник
 

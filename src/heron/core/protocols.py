@@ -47,6 +47,11 @@ class ControlAdapter(Protocol):
     Read off the class before anything is constructed or connected, and declared
     even when empty: a side that says nothing has not been asked."""
 
+    supports_speed_scale: bool
+    """Whether this link executes the run's speed scale (ADR-0052). Read off the class,
+    with no default: an adapter that never heard of the scale must not be handed one
+    and ignore it on the first run on hardware."""
+
     def connect(self, profile: RobotProfile, config: dict[str, Any]) -> None: ...
 
     def disconnect(self) -> None: ...
@@ -54,7 +59,11 @@ class ControlAdapter(Protocol):
     def read_state(self) -> RobotState: ...
 
     def send_command(self, cmd: Command) -> None:
-        """Send one command, or raise ``CommandRefusedError`` and send nothing."""
+        """Send one command, or raise ``CommandRefusedError`` and send nothing.
+
+        A ``command`` link also refuses a command while a motion is ``moving`` or
+        ``halted``, and reports the accepted one as not ``idle`` until the robot
+        says it is over (ADR-0049)."""
 
     def capabilities(self) -> frozenset[Capability]:
         """What this link can actually do.

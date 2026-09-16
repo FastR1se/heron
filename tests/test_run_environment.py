@@ -88,7 +88,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Registry:
         profile = make_profile(
             name=name,
             description={"urdf": f"urdf/{name}.urdf"},
-            adapters={"sim.gazebo": AdapterSpec(plugin=plugin)},
+            adapters={"sim.gazebo": AdapterSpec(plugin=plugin), "real": AdapterSpec(plugin=plugin)},
         )
         write_urdf(tmp_path, name, list(profile.contract.joint_order))
         write_profile(tmp_path, profile)
@@ -174,3 +174,28 @@ def test_a_world_the_generators_do_not_produce_asks_for_nothing(tmp_path: Path) 
     assert result is not None and result.ok
     assert not any(line.startswith("окружение") for line in lines)
     assert process == {}
+
+
+def test_a_run_on_hardware_does_not_join_the_worlds_environment(world: Registry) -> None:
+    """The scenario's world is a simulator; its domain would hide the real robot (ADR-0051)."""
+    process: dict[str, str] = {}
+    lines, result = execute(
+        _scenario(("arm1", "arm")), world, target="real", speed_scale=1.0, environ=process
+    )
+
+    assert result is not None and result.ok, result
+    assert WorldAdapter.seen == dict.fromkeys(NAMES)
+    assert process == {}
+    assert "мир       действительность, окружение мира не применяется" in lines
+
+
+def test_a_process_environment_is_not_held_against_reality(world: Registry) -> None:
+    lines, _ = execute(
+        _scenario(("arm1", "arm")),
+        world,
+        target="real",
+        speed_scale=1.0,
+        dry_run=True,
+        environ={"ROS_DOMAIN_ID": "0"},
+    )
+    assert not any(line.startswith("окружение") for line in lines)

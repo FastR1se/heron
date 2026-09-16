@@ -1,8 +1,8 @@
 """What a test of this adapter needs: a profile, a link and a robot made of readings.
 
-Shipped with the package rather than kept in its tests, because the platform's
-contract suite for adapters runs this adapter too, and has to build it the way
-this package does.
+Shipped with the package rather than kept in its tests, so that a test of the
+package and its harness for the platform's contract suite build the adapter one
+way (ADR-0056).
 """
 
 from __future__ import annotations

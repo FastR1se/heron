@@ -366,7 +366,7 @@ def test_a_fresh_stub_generates_its_environments(tmp_path: Path) -> None:
     from heron.core.models import RobotProfile
     from heron.generators import build_profile
 
-    profile_path, _, _ = write_stub("some_robot", tmp_path, dof=4)
+    profile_path = write_stub("some_robot", tmp_path, dof=4).profile
     profile = load_model(profile_path, RobotProfile)
 
     bundle = build_profile(profile, profile_path, into=tmp_path / "out", backend=GAZEBO)

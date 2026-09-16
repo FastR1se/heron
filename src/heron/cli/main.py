@@ -22,7 +22,7 @@ import yaml
 
 from ..core.branding import APP_NAME, APP_TITLE, data_home, env_var, image_name, registry_root
 from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
-from ..core.enums import Severity
+from ..core.enums import ControlMode, Severity
 from ..core.loading import LoadError, load_model, read_yaml
 from ..core.models import PolicyRef, RobotProfile, Scenario
 from ..core.plugins import PluginError, load
@@ -609,6 +609,13 @@ def run(
         Path | None,
         typer.Option("--record", help="Записать прогон в файл MCAP (ADR-0038)."),
     ] = None,
+    speed_scale: Annotated[
+        float | None,
+        typer.Option(
+            "--speed-scale",
+            help="Шкала скорости прогона, 0 < s ≤ 1; на цели real обязательна (ADR-0052).",
+        ),
+    ] = None,
     roots: RootsOption = None,
 ) -> None:
     """Выполнить задачу сценария на роботе (фаза 3).
@@ -634,6 +641,7 @@ def run(
             dry_run=dry_run,
             scenario_path=scenario_file,
             record=record,
+            speed_scale=speed_scale,
         )
     except (RunError, IncompatibleSkillError, ProfileNotFoundError, LoadError) as exc:
         typer.echo(str(exc), err=True)
@@ -727,16 +735,28 @@ def profile_new(
     name: Annotated[str, typer.Argument(help="Имя нового робота.")],
     into: Annotated[Path, typer.Option("--into", help="Куда положить заготовку.")] = Path("."),
     dof: Annotated[int, typer.Option(help="Число суставов в заготовке.")] = 6,
+    control_mode: Annotated[
+        ControlMode,
+        typer.Option(
+            "--control-mode",
+            help="Класс связи: streaming — поток команд, command — «выполни движение» (ADR-0049).",
+        ),
+    ] = ControlMode.STREAMING,
 ) -> None:
-    """Создать заготовку профиля и скелет адаптера (раздел 9)."""
+    """Создать заготовку профиля и пакет адаптера с тестом общего набора (раздел 9, ADR-0056)."""
     try:
-        created = write_stub(name=name, into=into, dof=dof)
+        stub = write_stub(name=name, into=into, dof=dof, control_mode=control_mode)
     except (ValueError, FileExistsError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_UNREADABLE) from exc
-    for path in created:
+    for path in stub.paths:
         typer.echo(f"создано  {path}")
-    typer.echo("\nзаполните TODO и проверьте:  validate " + str(created[0]))
+    root = stub.pyproject.parent
+    typer.echo(
+        f"\nзаполните TODO и проверьте:\n"
+        f"  validate {stub.profile}\n"
+        f"  pip install -e {root}[test]  и  pytest {stub.test.parent}"
+    )
 
 
 # -- contract --------------------------------------------------------------

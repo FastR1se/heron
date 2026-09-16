@@ -22,6 +22,7 @@ from typing import cast
 from ..core.models import RobotProfile, SkillBinding, SkillSpec
 from ..core.plugins import PluginError, available, load
 from ..store.policies import PolicyStore
+from .goto_joints import GotoJointsSkill
 from .hold import HoldSkill
 from .learned import LearnedSkill
 from .move_joints import MoveJointsSkill
@@ -29,6 +30,7 @@ from .move_joints import MoveJointsSkill
 SkillFactory = Callable[[], object]
 
 BUILTIN: dict[str, SkillFactory] = {
+    GotoJointsSkill.spec.name: GotoJointsSkill,
     HoldSkill.spec.name: HoldSkill,
     MoveJointsSkill.spec.name: MoveJointsSkill,
 }

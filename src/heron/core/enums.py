@@ -32,6 +32,25 @@ class ControlMode(StrEnum):
     """Accepts "perform this motion" and reports completion (REST API)."""
 
 
+class MotionPhase(StrEnum):
+    """Where an accepted motion of a ``command`` robot is (ADR-0049). Closed.
+
+    "Done" alone does not prove arrival: a buffer emptied by a stop in the middle
+    of a path looks like one emptied by the end of it. So a skill reads the phase
+    for the end of a motion and the pose for arrival, and needs both.
+    """
+
+    IDLE = "idle"
+    """No accepted motion is unfinished."""
+
+    MOVING = "moving"
+    """The accepted motion is being executed."""
+
+    HALTED = "halted"
+    """The accepted motion is neither executing nor finished: a pause, a protective
+    stop, a safety status."""
+
+
 class AccessLevel(StrEnum):
     """Depth of control for robots with a built-in controller."""
 

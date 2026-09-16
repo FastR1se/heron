@@ -13,10 +13,18 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from conftest import make_profile, write_profile, write_urdf
+from conftest import make_command_profile, make_profile, write_profile, write_urdf
 from heron.adapters.dummy import DummyAdapter
 from heron.cli.main import EXIT_FOUND_ERRORS, EXIT_OK, app
-from heron.core.models import AdapterSpec, JointRange, Limits, ModelDescription, RobotProfile
+from heron.cli.run import execute
+from heron.core.models import (
+    AdapterSpec,
+    JointRange,
+    Limits,
+    ModelDescription,
+    RobotProfile,
+)
+from heron.registry.registry import Registry
 
 runner = CliRunner()
 
@@ -255,3 +263,104 @@ def test_a_link_that_cannot_be_established_is_reported_not_unwound(tmp_path: Pat
     assert "связь 'sim.dummy' не установлена" in result.output
     assert "окружение не подключено" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+# -- on hardware, and slowed (ADR-0051, ADR-0052) ------------------------------------
+
+
+class StreamOnlyAdapter(DummyAdapter):
+    """A link that says it cannot slow the robot."""
+
+    supports_speed_scale = False
+
+
+class ScaledAdapter(DummyAdapter):
+    """Remembers the configuration it was connected with."""
+
+    config: dict[str, object] | None = None
+
+    def connect(self, profile: RobotProfile, config: dict[str, object]) -> None:
+        type(self).config = dict(config)
+        super().connect(profile, config)
+
+
+def _hardware(tmp_path: Path, plugin: str = "dummy", **overrides: object) -> Path:
+    """A command robot with a simulated world of numbers and a link to the real one."""
+    fields: dict[str, object] = {
+        "description": ModelDescription(urdf="urdf/arm.urdf"),
+        "adapters": {"sim.dummy": AdapterSpec(plugin="dummy"), "real": AdapterSpec(plugin=plugin)},
+    }
+    fields.update(overrides)
+    profile = make_command_profile(name="arm", **fields)
+    write_urdf(tmp_path, "arm", JOINTS)
+    write_profile(tmp_path, profile)
+    return scenario(
+        tmp_path, task={"skill": "goto_joints", "target": [0.2, 0.0, 0.0], "tolerance": 1e-6}
+    )
+
+
+def test_a_run_on_hardware_requires_a_speed_scale(tmp_path: Path) -> None:
+    result = run(_hardware(tmp_path), tmp_path, "--target", "real", "--dry-run")
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "шкала скорости обязательна" in result.output
+
+
+def test_the_plan_of_a_run_on_hardware_names_reality_and_the_scale(tmp_path: Path) -> None:
+    path = _hardware(tmp_path)
+    result = run(path, tmp_path, "--target", "real", "--speed-scale", "0.1", "--dry-run")
+
+    assert result.exit_code == EXIT_OK, result.output
+    assert "мир       действительность, окружение мира не применяется" in result.output
+    assert "шкала     скорости 0.1" in result.output
+
+
+def test_a_simulated_run_is_at_full_speed_unless_told(tmp_path: Path) -> None:
+    result = run(_hardware(tmp_path), tmp_path, "--dry-run")
+
+    assert result.exit_code == EXIT_OK, result.output
+    assert "мир       dummy  (владелец физики)" in result.output
+    assert "шкала     скорости 1" in result.output
+
+
+def test_a_robot_without_an_envelope_does_not_go_to_hardware(tmp_path: Path) -> None:
+    unbounded = Limits(joint_position=JointRange(min=[-2.0] * 3, max=[2.0] * 3))
+    path = _hardware(tmp_path, limits=unbounded)
+    result = run(path, tmp_path, "--target", "real", "--speed-scale", "1", "--dry-run")
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "[real.limits_missing]" in result.output
+    assert "joint_velocity" in result.output
+
+
+@pytest.mark.parametrize("scale", ["0", "1.5", "-0.5"])
+def test_a_speed_scale_outside_its_range_is_refused(tmp_path: Path, scale: str) -> None:
+    result = run(_hardware(tmp_path), tmp_path, "--speed-scale", scale, "--dry-run")
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "0 < s ≤ 1" in result.output
+
+
+def test_an_adapter_that_cannot_slow_the_robot_is_not_handed_a_scale(tmp_path: Path) -> None:
+    path = _hardware(tmp_path, plugin="test_cli_run:StreamOnlyAdapter")
+    result = run(path, tmp_path, "--target", "real", "--speed-scale", "0.5")
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "не исполняет шкалу скорости" in result.output
+
+
+def test_the_scale_reaches_the_adapter_and_slows_the_run(tmp_path: Path) -> None:
+    path = _hardware(tmp_path, plugin="test_cli_run:ScaledAdapter")
+    from heron.scenario.loader import load_scenario
+
+    _, full = execute(load_scenario(path), Registry([tmp_path]), target="real", speed_scale=1.0)
+    _, slow = execute(load_scenario(path), Registry([tmp_path]), target="real", speed_scale=0.25)
+
+    assert full is not None and full.ok and slow is not None and slow.ok
+    assert ScaledAdapter.config is not None and ScaledAdapter.config["speed_scale"] == 0.25
+    assert slow.states[-1].timestamp > 3 * full.states[-1].timestamp
+
+
+def test_a_profile_cannot_state_the_speed_scale() -> None:
+    with pytest.raises(ValueError, match="величина прогона"):
+        AdapterSpec(plugin="dummy", params={"speed_scale": 0.1})

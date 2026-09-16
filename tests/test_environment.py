@@ -360,7 +360,7 @@ def test_a_twin_that_does_not_say_what_it_needs_is_unreadable() -> None:
 
 def test_a_generated_adapter_stub_declares_its_requirements(tmp_path: Path) -> None:
     """Every robot added the standard way starts with the member, and empty."""
-    _, adapter, _ = write_stub("some_robot", tmp_path)
+    adapter = write_stub("some_robot", tmp_path).adapter
     spec = importlib.util.spec_from_file_location("some_robot_adapter", adapter)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

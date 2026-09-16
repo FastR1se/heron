@@ -23,7 +23,7 @@ from typing import Any, BinaryIO, Final
 
 from .. import __version__
 from ..core.branding import APP_NAME
-from ..core.enums import ActionType
+from ..core.enums import ActionType, MotionPhase
 from ..core.types import Command, Pose, RobotState
 from .executor import RunResult
 
@@ -52,6 +52,7 @@ STATE_SCHEMA: Final = {
         "joint_velocity": _VECTOR,
         "joint_torque": _VECTOR,
         "base": _POSE,
+        "motion": {"type": ["string", "null"]},
         "extra": {"type": "object"},
     },
     "required": ["timestamp", "joint_position", "joint_velocity", "joint_torque"],
@@ -116,6 +117,7 @@ def state_fields(state: RobotState) -> dict[str, Any]:
         "joint_velocity": _vector(state.joint_velocity),
         "joint_torque": _vector(state.joint_torque),
         "base": _pose(state.base),
+        "motion": None if state.motion is None else str(state.motion),
         "extra": state.extra,
     }
 
@@ -151,6 +153,7 @@ def state_of(data: Mapping[str, Any]) -> RobotState:
         joint_velocity=_floats(data["joint_velocity"]),
         joint_torque=_floats(data["joint_torque"]),
         base=_pose_of(data.get("base")),
+        motion=None if data.get("motion") is None else MotionPhase(data["motion"]),
         extra=dict(data.get("extra") or {}),
     )
 

@@ -101,6 +101,22 @@ def make_profile(name: str = "test_arm", dof: int = 3, **overrides: Any) -> Robo
     return RobotProfile(**fields)
 
 
+def make_command_profile(name: str = "command_arm", dof: int = 3, **overrides: Any) -> RobotProfile:
+    """A robot of the command class: it plans the motion and reports its phase (ADR-0049)."""
+    fields: dict[str, Any] = {
+        "contract": make_contract(dof, state_rate_hz=20.0, command_rate_hz=2.0),
+        "control_mode": ControlMode.COMMAND,
+        "limits": Limits(
+            joint_position=JointRange(min=[-2.0] * dof, max=[2.0] * dof),
+            joint_velocity=JointMax(max=[1.0] * dof),
+            joint_acceleration=JointMax(max=[2.0] * dof),
+        ),
+        "skills": ("goto_joints",),
+    }
+    fields.update(overrides)
+    return make_profile(name, dof, **fields)
+
+
 @pytest.fixture
 def contract() -> Contract:
     return make_contract()

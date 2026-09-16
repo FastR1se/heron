@@ -33,6 +33,11 @@ NAME_RE: Final = re.compile(r"^[a-z][a-z0-9_]*$")
 SIM_TARGET_PREFIX: Final = "sim."
 REAL_TARGET: Final = "real"
 
+SPEED_SCALE_PARAM: Final = "speed_scale"
+"""Key of the link configuration through which ``run`` hands an adapter the speed
+scale of the run (ADR-0052). Written by ``run`` alone; a profile's ``params`` may
+not state it, because a scale in a profile is the edit someone forgets to undo."""
+
 POLICY_REF_SEPARATOR: Final = "@"
 POLICY_REF_RE: Final = re.compile(
     rf"^([a-z][a-z0-9_]*){POLICY_REF_SEPARATOR}([0-9a-f]{{{CONTRACT_ID_LENGTH}}})$"
@@ -145,6 +150,9 @@ class Limits(BaseModel):
 
     joint_position: JointRange | None = None
     joint_velocity: JointMax | None = None
+    joint_acceleration: JointMax | None = None
+    """What a controller planning the motion itself may accelerate at (ADR-0049)."""
+
     joint_torque: JointMax | None = None
     cartesian_velocity_max: float | None = Field(default=None, gt=0)
     gripper_width_max: float | None = Field(default=None, gt=0)
@@ -163,6 +171,16 @@ class AdapterSpec(BaseModel):
     """Entry point name, or ``module:Class`` for a plugin not yet installed."""
 
     params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _no_run_quantities(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if SPEED_SCALE_PARAM in value:
+            raise ValueError(
+                f"params.{SPEED_SCALE_PARAM}: шкала скорости — величина прогона, а не профиля; "
+                f"задаётся run --speed-scale (ADR-0052)"
+            )
+        return value
 
 
 class SkillBinding(BaseModel):

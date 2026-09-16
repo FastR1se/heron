@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 from conftest import EXAMPLES
+from heron.cli.new_robot import write_stub
+from heron.core.enums import ControlMode
 from heron.public import PUBLIC_MODULES
 
 APP_NAME = "heron"
@@ -90,3 +92,40 @@ def test_robot_packages_import_only_the_public_api() -> None:
         pytest.skip("пакетов роботов в examples/plugins нет")
     offenders = private_imports(PLUGINS)
     assert not offenders, "пакет робота обходит публичный API:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize("mode", list(ControlMode))
+def test_a_generated_robot_package_imports_only_the_public_api(
+    tmp_path: Path, mode: ControlMode
+) -> None:
+    """The path a user takes starts inside the promise, not beside it (ADR-0056)."""
+    write_stub("my_robot", tmp_path, control_mode=mode)
+    offenders = private_imports(tmp_path)
+    assert not offenders, "заготовка обходит публичный API:\n" + "\n".join(offenders)
+
+
+def test_platform_tests_do_not_name_the_robot_packages() -> None:
+    """A package holds itself to the suite; the platform does not import it (ADR-0056).
+
+    The platform's tests once reached the G1 package by importing its harness. A name
+    spelled as data -- a policy called like its task package -- is not a reach.
+    """
+    if not PLUGINS.is_dir():
+        pytest.skip("пакетов роботов в examples/plugins нет")
+    names = {
+        module.name
+        for root in PLUGINS.iterdir()
+        for module in (root / "src").glob("*")
+        if module.is_dir()
+    }
+    offenders: list[str] = []
+    for path in sorted(Path(__file__).resolve().parent.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                spelled = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                spelled = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            offenders += [f"{path.name}:{node.lineno}: {name}" for name in spelled if name in names]
+    assert not offenders, "тесты платформы называют пакеты роботов:\n" + "\n".join(offenders)

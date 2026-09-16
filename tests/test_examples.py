@@ -450,3 +450,29 @@ def test_the_vendor_robot_scenario_validates_and_its_goal_fits(
     assert bounds is not None
     assert len(target) == profile.contract.dof
     assert all(lo <= v <= hi for v, lo, hi in zip(target, bounds.min, bounds.max, strict=True))
+
+
+def test_the_command_robot_moves_in_a_world_of_numbers(examples_dir: Path, robots: Path) -> None:
+    """The command class end to end on its example, before any such robot exists (ADR-0049)."""
+    from heron.cli.run import execute
+
+    scenario = load_scenario(examples_dir / "scenarios" / "rest_bench.yaml")
+    _, result = execute(scenario, Registry([robots]))
+
+    assert result is not None and result.ok, result
+    assert len(result.commands) == 1
+    assert result.states[-1].joint_position == pytest.approx((30.0, -20.0, 15.0, 0.0))
+
+
+def test_the_same_mission_goes_to_hardware_by_target(examples_dir: Path, robots: Path) -> None:
+    """One scenario, two owners of physics (ADR-0051): the plan says which."""
+    from heron.cli.run import execute
+
+    scenario = load_scenario(examples_dir / "scenarios" / "rest_bench.yaml")
+    lines, result = execute(
+        scenario, Registry([robots]), target="real", speed_scale=0.1, dry_run=True
+    )
+
+    assert result is None
+    assert "мир       действительность, окружение мира не применяется" in lines
+    assert "шкала     скорости 0.1" in lines

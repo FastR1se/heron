@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .enums import ActionType
+from .enums import ActionType, MotionPhase
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +37,10 @@ class RobotState:
     joint_velocity: tuple[float, ...] = ()
     joint_torque: tuple[float, ...] = ()
     base: Pose | None = None
+    motion: MotionPhase | None = None
+    """Phase of the accepted motion, from the same reading of the robot as the pose
+    (ADR-0049, ADR-0050). ``None``: the link does not report one, as a stream does not."""
+
     extra: dict[str, Any] = field(default_factory=dict)
     """Adapter-specific readings. The core never interprets them."""
 

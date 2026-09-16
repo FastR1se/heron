@@ -43,5 +43,7 @@ PUBLIC_MODULES: Final = frozenset(
         "sim.process",
         # What a twin that is a MuJoCo world of its own contributes (ADR-0030).
         "sim.mujoco_twin",
+        # The contract suite a package holds its adapter to, from its own tests (ADR-0056).
+        "testing.adapter_contract",
     }
 )

@@ -11,6 +11,7 @@ split explicit is what stops the validator from quietly becoming a loader.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 from ..core import capabilities as caps
 from ..core import requires as req
@@ -104,6 +105,7 @@ def _check_limit_lengths(profile: RobotProfile, report: Report) -> None:
         ("joint_position.min", getattr(profile.limits.joint_position, "min", None)),
         ("joint_position.max", getattr(profile.limits.joint_position, "max", None)),
         ("joint_velocity.max", getattr(profile.limits.joint_velocity, "max", None)),
+        ("joint_acceleration.max", getattr(profile.limits.joint_acceleration, "max", None)),
         ("joint_torque.max", getattr(profile.limits.joint_torque, "max", None)),
     )
     for field_name, values in checks:
@@ -341,8 +343,54 @@ def _check_adapters(profile: RobotProfile, report: Report) -> None:
 
 
 # --------------------------------------------------------------------------
+# A robot against hardware.
+# --------------------------------------------------------------------------
+
+REAL_ENVELOPE: Final = ("joint_position", "joint_velocity")
+"""What a profile must bound before a run on hardware (section 12, ADR-0051)."""
+
+
+def check_real_target(profile: RobotProfile) -> Report:
+    """Whether this robot may be run on hardware at all: the envelope is declared."""
+    report = Report()
+    missing = [name for name in REAL_ENVELOPE if getattr(profile.limits, name) is None]
+    if missing:
+        report.add(
+            error(
+                "real.limits_missing",
+                f"profile:{profile.name}.limits",
+                f"прогон на железе без рамки: нет {', '.join(missing)}",
+                hint="валидатор сверяет пределы суставов и скоростей перед любым запуском на "
+                "железе (раздел 12); объявите их в limits профиля",
+                adr="ADR-0051",
+                detail={"missing": missing},
+            )
+        )
+    return report
+
+
+# --------------------------------------------------------------------------
 # A skill against a robot.
 # --------------------------------------------------------------------------
+
+CONTROL_MODE_MISMATCH: Final[dict[ControlMode, tuple[str, str]]] = {
+    ControlMode.STREAMING: (
+        "навык требует потокового управления",
+        "политика с циклом на фиксированной частоте здесь неисполнима",
+    ),
+    ControlMode.COMMAND: (
+        "навык отдаёт движение целиком",
+        "одна цель без разгона на потоковой связи — ступень, "
+        "а фазы движения потоковая связь не сообщает",
+    ),
+}
+"""Why a skill of one class cannot run on a robot of the other: modes compare by
+equality, in both directions (ADR-0049)."""
+
+ROBOT_ACCEPTS: Final[dict[ControlMode, str]] = {
+    ControlMode.STREAMING: "принимает поток команд",
+    ControlMode.COMMAND: "принимает команды целиком",
+}
 
 
 def check_skill_against_profile(skill: SkillSpec, profile: RobotProfile) -> Report:
@@ -363,18 +411,19 @@ def check_skill_against_profile(skill: SkillSpec, profile: RobotProfile) -> Repo
             )
         )
 
-    if (
-        skill.required_control_mode is ControlMode.STREAMING
-        and profile.control_mode is ControlMode.COMMAND
-    ):
+    if skill.required_control_mode is not profile.control_mode:
+        message, hint = CONTROL_MODE_MISMATCH[skill.required_control_mode]
         report.add(
             error(
                 "skill.control_mode_incompatible",
                 where,
-                "навык требует потокового управления, робот принимает команды целиком",
-                hint="политика с циклом на фиксированной частоте здесь неисполнима",
-                adr="раздел 3",
-                detail={"required": "streaming", "actual": "command"},
+                f"{message}, робот {ROBOT_ACCEPTS[profile.control_mode]}",
+                hint=hint,
+                adr="раздел 3, ADR-0049",
+                detail={
+                    "required": str(skill.required_control_mode),
+                    "actual": str(profile.control_mode),
+                },
             )
         )
 

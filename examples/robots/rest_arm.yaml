@@ -25,6 +25,11 @@ limits:
   joint_position:
     min: [-180.0, -90.0, -90.0, -180.0]
     max: [180.0, 90.0, 90.0, 180.0]
+  # По ним контроллер строит движение, умноженные на шкалу прогона (ADR-0049, ADR-0052).
+  joint_velocity:
+    max: [45.0, 45.0, 45.0, 45.0]      # град/с, уже 1 рад/с описания
+  joint_acceleration:
+    max: [90.0, 90.0, 90.0, 90.0]      # град/с²
 
 adapters:
   sim.dummy:
@@ -33,4 +38,4 @@ adapters:
     plugin: rest_arm.adapter:RestArmAdapter
     params: {host: "http://10.10.10.20:8081"}
 
-skills: []
+skills: [goto_joints]

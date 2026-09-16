@@ -1,0 +1,16 @@
+# Командный класс без железа: rest_arm в мире из чисел (ADR-0049, ADR-0051).
+# Та же миссия идёт на железо целью, а не другим сценарием:
+#   run rest_bench.yaml --target real --speed-scale 0.1
+schema_version: 1
+name: rest_bench
+
+world:
+  backend: dummy
+
+robots:
+  - {id: arm1, profile: rest_arm, pose: [0.0, 0.0, 0.8], role: scripted}
+
+task:
+  skill: goto_joints
+  target: [30.0, -20.0, 15.0, 0.0]   # градусы, как в контракте
+  tolerance: 0.5

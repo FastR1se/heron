@@ -26,8 +26,7 @@ jobs:
           enable-cache: true
 
       # Фаза 4: пакет робота ставится рядом с платформой, как пакет производителя
-      # (ADR-0021). Общий набор адаптеров его находит и отказывается пройти, если
-      # пакет лежит в examples/plugins, но не установлен.
+      # (ADR-0021). Общий набор адаптеров пакет прогоняет из своих тестов (ADR-0056).
       - name: Поставить ядро с dev-зависимостями и пакет робота
         run: |
           uv venv --python 3.11
@@ -103,6 +102,18 @@ jobs:
           uv run heron validate examples/scenarios/bench.yaml --registry examples/robots
           uv run heron validate examples/scenarios/table.yaml --registry examples/robots
 
+      # Фаза 5: командный класс исполняется на мире из чисел, а та же миссия уходит на
+      # железо целью; без шкалы скорости прогон на железе не планируется (ADR-0051, ADR-0052).
+      - name: Командный класс на dummy и план прогона на железе
+        run: |
+          uv run heron run examples/scenarios/rest_bench.yaml --registry examples/robots
+          uv run heron run examples/scenarios/rest_bench.yaml --registry examples/robots \
+            --target real --speed-scale 0.1 --dry-run
+          if uv run heron run examples/scenarios/rest_bench.yaml --registry examples/robots \
+               --target real --dry-run; then
+            echo "прогон на железе спланирован без шкалы скорости"; exit 1
+          fi
+
       # ADR-0025: проверка окружения — про машину, а не про данные. Сцене на
       # заглушке не нужно ничего; сцене в Gazebo здесь не хватает ROS 2, и
       # команда обязана это назвать, а не пройти.
@@ -157,3 +168,32 @@ jobs:
             echo "мир MuJoCo построен без пакета робота"; cat sim-mujoco.txt; exit 1
           fi
           grep -F "адаптер не установлен" sim-mujoco.txt
+
+  user-robot-stub:
+    name: Критерий 10 — заготовка робота пользователя
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # ADR-0056: путь пользователя проверяется тем путём, что у пользователя. Заготовка
+      # командного класса ставится пакетом рядом с платформой, её профиль проходит validate,
+      # а общий набор из тестов заготовки падает — и только на TODO, которые она оставила.
+      - name: Заготовка ставится, проверяется и называет свои TODO
+        run: |
+          uv venv --python 3.11
+          uv pip install -e ".[testing]"
+          .venv/bin/heron profile new my_robot --into "$RUNNER_TEMP" --control-mode command
+          uv pip install -e "$RUNNER_TEMP/my_robot[test]"
+          .venv/bin/heron validate "$RUNNER_TEMP/my_robot/profile.yaml"
+          cd "$RUNNER_TEMP/my_robot"
+          if "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest -q tests > suite.txt 2>&1; then
+            echo "набор заготовки прошёл, хотя адаптер — одни TODO"; cat suite.txt; exit 1
+          fi
+          cat suite.txt
+          if grep -E "^E  " suite.txt | grep -v "TODO"; then
+            echo "набор заготовки упал не на TODO"; exit 1
+          fi

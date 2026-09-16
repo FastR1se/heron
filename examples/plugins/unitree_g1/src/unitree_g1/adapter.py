@@ -124,6 +124,9 @@ class G1DdsAdapter:
 
     requirements: Sequence[Requirement] = REQUIREMENTS
 
+    supports_speed_scale: bool = False
+    """A stream is planned by the skill or the policy; the link cannot slow it (ADR-0052)."""
+
     def __init__(self, channel: Channel | None = None) -> None:
         self._channel = channel
         self._owns_channel = channel is None
