@@ -1165,6 +1165,9 @@ G1 — робот со своим протоколом (DDS производит
 проверенная последовательность — скрипты `scripts/phase4-stage4.sh` (MuJoCo) и
 `scripts/phase4-stage5.sh` (Gazebo).
 
+**Настоящий G1, а не симулятор** — отдельная пошаговая инструкция со сборкой CycloneDDS 0.10.2,
+отдельным venv, правкой профиля и запуском: [docs/g1-on-hardware.md](g1-on-hardware.md).
+
 Коротко о том, что нужно:
 
 | Что | Зачем |
@@ -1366,6 +1369,8 @@ heron run rest_bench.yaml -R my_robots          # sim.dummy в профиле
 heron run rest_bench.yaml -R my_robots --target real --speed-scale 0.1 --dry-run
 heron run rest_bench.yaml -R my_robots --target real --speed-scale 0.1 --record first.mcap
 ```
+
+Готовый пример этого пути на живом роботе с вендорским DDS — [docs/g1-on-hardware.md](g1-on-hardware.md).
 
 На `real`: валидатор проверяет сценарий целиком; без `limits.joint_position` или
 `limits.joint_velocity` — `real.limits_missing`; `--speed-scale` обязательна, полная скорость
@@ -1901,6 +1906,7 @@ mypy examples/plugins/unitree_g1/src
 |---|---|
 | [README.md](../README.md) | обзор платформы |
 | [docs/adding-a-robot.md](adding-a-robot.md) | добавляете робота: описание, профиль, частые отказы, пакет производителя |
+| [docs/g1-on-hardware.md](g1-on-hardware.md) | выводите команды на настоящего Unitree G1: зависимости по шагам, профиль, запуск, ошибки |
 | [docs/phase0.md](phase0.md) | разворачиваете Linux-окружение |
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | нужен источник правды: инварианты, абстракции, дорожная карта |
 | [docs/decisions/](decisions/) | хотите понять, **почему** сделано так: контекст, альтернативы, последствия. Номера ADR в сообщениях валидатора ведут сюда |
