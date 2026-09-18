@@ -105,7 +105,7 @@ class CycloneChannel:
         if newest is None:
             try:
                 sample = self._reader.take_one(timeout=self._duration(seconds=max(timeout, 0.0)))
-            except TimeoutError:
+            except (TimeoutError, StopIteration):
                 return None
             if not isinstance(sample, self._invalid):
                 newest = sample

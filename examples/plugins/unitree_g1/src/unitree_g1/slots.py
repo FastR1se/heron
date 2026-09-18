@@ -71,13 +71,22 @@ BODY_23DOF: Final = BODY_29DOF - {
 """Slots 13, 14, 20, 21, 27 and 28 empty: "INVALID for g1 23dof" in the vendor's
 examples, dummy bodies twenty metres above the world in the twin's MJCF."""
 
-MACHINES: Final[dict[int, frozenset[str]]] = {4: BODY_23DOF, 5: BODY_29DOF}
+BODY_27DOF: Final = BODY_29DOF - {
+    "waist_roll_joint",
+    "waist_pitch_joint",
+}
+"""Slots 13, 14 empty: waist roll/pitch absent; both wrists full (pitch+yaw)."""
+
+MACHINES: Final[dict[int, frozenset[str]]] = {4: BODY_23DOF, 5: BODY_29DOF, 6: BODY_27DOF}
 """The body behind each ``mode_machine`` a robot reports.
 
 Taken from the vendor's C++ twin, which reports 4 for a scene whose file name
 contains "23" and 5 otherwise. What the hardware reports is not visible in any
 source; a value missing here refuses the connection with the number, and is
-added as a fact when it is one (phase 7), not guessed."""
+added as a fact when it is one (phase 7), not guessed.
+
+mode_machine = 6: 27-DoF hardware variant (both wrists full, waist yaw only),
+discovered empirically on physical robot (journal 2026-09-18, session 25)."""
 
 
 class SlotError(RuntimeError):

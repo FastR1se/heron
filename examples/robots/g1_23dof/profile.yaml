@@ -126,5 +126,8 @@ adapters:
   sim.mujoco:
     plugin: unitree_g1_dds
     params: *local_link
+  real:
+    plugin: unitree_g1_dds
+    params: {domain: 0, interface: wlp2s0}
 
 skills: [hold, move_joints]
