@@ -13,7 +13,13 @@ import pytest
 
 from conftest import urdf_text, write_urdf
 from heron.core.loading import LoadError
-from heron.core.urdf import is_template, parse_urdf, parse_urdf_text
+from heron.core.urdf import (
+    CollisionMesh,
+    is_template,
+    parse_urdf,
+    parse_urdf_text,
+    triangle_count,
+)
 
 
 def test_joints_links_and_limits_are_read(tmp_path: Path) -> None:
@@ -113,3 +119,55 @@ def test_a_template_is_refused_rather_than_guessed_at(tmp_path: Path) -> None:
 def test_a_missing_file_is_a_load_error(tmp_path: Path) -> None:
     with pytest.raises(LoadError):
         parse_urdf(tmp_path / "absent.urdf")
+
+
+# -- collision geometry, and what it costs (ADR-0073) ----------------------
+
+
+COLLIDING = """  <link name="part">
+    <visual><geometry><mesh filename="drawn.stl"/></geometry></visual>
+    <collision><geometry><mesh filename="collided.stl"/></geometry></collision>
+  </link>
+"""
+
+
+def test_a_collision_mesh_is_read_apart_from_the_one_that_is_drawn() -> None:
+    """Both are meshes of the same link and only one is walked by the solver."""
+    model = parse_urdf_text(
+        urdf_text("arm", ["a"], extra=COLLIDING), Path("<память>")
+    )
+
+    assert model.meshes == ("drawn.stl", "collided.stl")
+    assert model.collision_meshes == (CollisionMesh(link="part", filename="collided.stl"),)
+
+
+def test_a_binary_stl_is_counted_from_its_own_field(tmp_path: Path) -> None:
+    path = tmp_path / "part.stl"
+    path.write_bytes(b"\x00" * 80 + (7).to_bytes(4, "little") + b"\x00" * (50 * 7))
+
+    assert triangle_count(path) == 7
+
+
+def test_a_facet_split_across_two_reads_is_counted_once(tmp_path: Path) -> None:
+    """The ASCII form is counted on the bytes, in pieces, and a file large enough
+    to be read in more than one piece is where an overlap is either missing or
+    doubled. Built so that a facet begins six bytes before the boundary."""
+    size = 1 << 20
+    head = b"solid part\n"
+    path = tmp_path / "part.stl"
+    path.write_bytes(
+        head
+        + b"x" * (size - 6 - len(head))
+        + b"facet normal 0 0 1\n"
+        + b"facet normal 0 0 1\n"
+        + b"endsolid part\n"
+    )
+
+    assert triangle_count(path) == 2
+
+
+def test_a_format_this_reader_cannot_count_is_not_guessed_at(tmp_path: Path) -> None:
+    path = tmp_path / "part.dae"
+    path.write_bytes(b"<COLLADA/>")
+
+    assert triangle_count(path) is None

@@ -239,15 +239,23 @@ def test_the_vendor_robot_contract_is_locked(robots: Path) -> None:
 def test_the_vendor_robot_agrees_with_its_description(robots: Path) -> None:
     """23 joints, their limits and every mesh, against the vendor's own file.
 
-    The one warning is a condition of the run, not a defect: the base is free
-    and the built-in controller is off (ADR-0018)."""
+    Two warnings, both conditions of a run rather than defects. The base is free
+    and the built-in controller is off (ADR-0018). And the vendor's own
+    ``<collision>`` elements are its visual surfaces: 21 meshes, 323 924
+    triangles, the lightest of them 1422 (ADR-0073). That number is recorded here
+    rather than quietly excused by a higher threshold -- it is the same file that
+    every G1 scene is built from, and what a step of that world costs is a fact
+    about it."""
     path = _vendor_profile(robots)
     report = check_profile(load_model(path, RobotProfile), path=path)
 
     assert report.ok, [f.code for f in report.errors]
-    assert [c for c in report.codes() if c.startswith("urdf.")] == [
-        "urdf.free_base_uncontrolled"
+    assert sorted(c for c in report.codes() if c.startswith("urdf.")) == [
+        "urdf.collision_mesh_heavy",
+        "urdf.free_base_uncontrolled",
     ]
+    heavy = next(f for f in report.findings if f.code == "urdf.collision_mesh_heavy")
+    assert sum(item["triangles"] for item in heavy.detail["collision_meshes"]) == 323_924
 
 
 def test_the_vendor_robot_agrees_with_its_mjcf_and_names_where_the_two_disagree(

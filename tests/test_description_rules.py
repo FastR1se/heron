@@ -251,6 +251,106 @@ def test_a_relative_mesh_that_exists_is_found(tmp_path: Path) -> None:
     assert report.codes() == []
 
 
+# -- what collision geometry costs (ADR-0073) ------------------------------
+
+COLLIDING_LINK = """  <link name="part">
+    <visual><geometry><mesh filename="meshes/{visual}"/></geometry></visual>
+    <collision><geometry><mesh filename="meshes/{collision}"/></geometry></collision>
+  </link>
+  <joint name="part_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="part"/>
+  </joint>
+"""
+
+
+def _stl(directory: Path, name: str, triangles: int) -> None:
+    """A binary STL of the stated size: 80 bytes of comment, the count, the triangles."""
+    directory.mkdir(parents=True, exist_ok=True)
+    body = b"\x00" * 80 + triangles.to_bytes(4, "little") + b"\x00" * (50 * triangles)
+    (directory / name).write_bytes(body)
+
+
+def _with_meshes(tmp_path: Path, *, visual: int, collision: int) -> tuple[Path, object]:
+    path, profile = _profile_with_description(
+        tmp_path,
+        ["a"],
+        urdf_kwargs={
+            "extra": COLLIDING_LINK.format(visual="drawn.stl", collision="collided.stl")
+        },
+    )
+    meshes = tmp_path / "urdf" / "meshes"
+    _stl(meshes, "drawn.stl", visual)
+    _stl(meshes, "collided.stl", collision)
+    return path, profile
+
+
+def test_a_cad_surface_used_as_collision_geometry_is_a_warning(tmp_path: Path) -> None:
+    """The failure of the Gazebo run of 2026-09-20, caught before the run this time.
+
+    A world whose solver walks a CAD surface every step ran at 0.0056 of real
+    time, and a contract promising 20 Hz of state delivered 0.11 Hz. Nothing in
+    the platform had anything to say about it beforehand (ADR-0073)."""
+    path, profile = _with_meshes(tmp_path, visual=200_000, collision=120_000)
+
+    report = check_description(profile, path)  # type: ignore[arg-type]
+
+    assert report.codes() == ["urdf.collision_mesh_heavy"]
+    assert report.ok, "предупреждение: платформа не знает машины, на которой считают"
+    finding = report.findings[0]
+    assert finding.detail["collision_meshes"] == [
+        {"link": "part", "mesh": "meshes/collided.stl", "triangles": 120_000}
+    ]
+
+
+def test_a_detailed_mesh_that_is_only_drawn_says_nothing(tmp_path: Path) -> None:
+    """The discriminating case: the same file in <visual> costs a frame, in
+    <collision> it costs every step of the world. A rule that could not tell them
+    apart would fire on every robot that looks like itself."""
+    path, profile = _with_meshes(tmp_path, visual=200_000, collision=120)
+
+    report = check_description(profile, path)  # type: ignore[arg-type]
+    assert report.codes() == []
+
+
+def test_a_collision_mesh_in_a_format_nobody_counted_says_nothing(tmp_path: Path) -> None:
+    """A warning carrying a number nobody measured is worse than no warning."""
+    path, profile = _profile_with_description(
+        tmp_path,
+        ["a"],
+        urdf_kwargs={
+            "extra": COLLIDING_LINK.format(visual="drawn.dae", collision="collided.dae")
+        },
+    )
+    meshes = tmp_path / "urdf" / "meshes"
+    meshes.mkdir(parents=True, exist_ok=True)
+    for name in ("drawn.dae", "collided.dae"):
+        (meshes / name).write_bytes(b"<COLLADA/>" + b"\x00" * 10_000_000)
+
+    report = check_description(profile, path)  # type: ignore[arg-type]
+    assert report.codes() == []
+
+
+def test_the_ascii_form_of_stl_is_counted_too(tmp_path: Path) -> None:
+    """Counted on the bytes and across the pieces they are read in: a facet split
+    over a boundary is counted once, not twice and not never."""
+    path, profile = _profile_with_description(
+        tmp_path,
+        ["a"],
+        urdf_kwargs={
+            "extra": COLLIDING_LINK.format(visual="drawn.stl", collision="collided.stl")
+        },
+    )
+    meshes = tmp_path / "urdf" / "meshes"
+    _stl(meshes, "drawn.stl", 10)
+    facet = b"  facet normal 0 0 1\n    outer loop\n" + b"      vertex 0 0 0\n" * 3
+    (meshes / "collided.stl").write_bytes(b"solid part\n" + facet * 1_001 + b"endsolid part\n")
+
+    report = check_description(profile, path)  # type: ignore[arg-type]
+    assert report.codes() == ["urdf.collision_mesh_heavy"]
+    assert report.findings[0].detail["collision_meshes"][0]["triangles"] == 1_001
+
+
 # -- the base --------------------------------------------------------------
 
 WORLD_MOUNT = """  <link name="world"/>

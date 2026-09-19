@@ -28,11 +28,28 @@ from ..core.enums import AccessLevel, AngleUnit
 from ..core.loading import LoadError
 from ..core.models import RobotProfile
 from ..core.units import format_angle, to_radians
-from ..core.urdf import UrdfJoint, UrdfModel, is_template, parse_urdf, resolve_mesh
+from ..core.urdf import (
+    UrdfJoint,
+    UrdfModel,
+    is_template,
+    parse_urdf,
+    resolve_mesh,
+    triangle_count,
+)
 from .report import Report, error, warning
 
 TOLERANCE: Final = 1e-6
 """Slack in a limit comparison, in radians or metres. Float noise, not policy."""
+
+COLLISION_TRIANGLES_MAX: Final = 1_000
+"""Triangles above which a collision mesh is reported as a cost, not a shape.
+
+The number separates two populations, it does not tune anything between them. A
+shape offered to a solver as a proxy -- a box, a cylinder, the convex hull of a
+part -- is tens to a few hundred triangles. A surface a CAD tool exports is tens
+to hundreds of thousands. Nothing anybody draws on purpose sits at a thousand,
+so the line could be drawn anywhere across the two orders of magnitude between
+them and would say the same thing (ADR-0073)."""
 
 
 def check_description(profile: RobotProfile, profile_path: Path) -> Report:
@@ -292,6 +309,7 @@ def _check_meshes(
     where = f"profile:{profile.name}.description"
     unresolved: list[str] = []
     external: list[str] = []
+    found: dict[str, Path] = {}
 
     for reference in model.meshes:
         target = resolve_mesh(reference, path, profile.description.mesh_dir)
@@ -299,6 +317,8 @@ def _check_meshes(
             external.append(reference)
         elif not target.is_file():
             unresolved.append(reference)
+        else:
+            found[reference] = target
 
     if unresolved:
         report.add(
@@ -324,3 +344,64 @@ def _check_meshes(
                 detail={"meshes": sorted(set(external))},
             )
         )
+    _check_collision_cost(profile, model, found, report)
+
+
+def _check_collision_cost(
+    profile: RobotProfile, model: UrdfModel, found: dict[str, Path], report: Report
+) -> None:
+    """What the description asks the solver to do on every step of the world (ADR-0073).
+
+    The quantity nobody wrote down. A contract promises state at a rate, a world
+    steps at a rate, and between them sits a number that lives in neither: how
+    many triangles the physics engine walks to find a contact. The first robot to
+    be measured against it ran its world at 0.0056 of real time -- 180 ms for a
+    step of 1 ms -- and the platform had nothing to say about that before the
+    run, so two days went to the control stack, which was healthy all along
+    (journal 2026-09-20).
+
+    Read only where it is measurable and said only where it is large: the point
+    is not that collision geometry is a mesh, which is sometimes right, but that
+    a mesh of this size was never meant to be collided with -- it is the drawing,
+    reused.
+    """
+    heavy: list[tuple[str, str, int]] = []
+    for mesh in model.collision_meshes:
+        target = found.get(mesh.filename)
+        count = triangle_count(target) if target is not None else None
+        if count is not None and count > COLLISION_TRIANGLES_MAX:
+            heavy.append((mesh.link, mesh.filename, count))
+    if not heavy:
+        return
+
+    worst = sorted(heavy, key=lambda item: -item[2])
+    listed = ", ".join(f"{link} → {name} ({count} тр.)" for link, name, count in worst[:3])
+    tail = f" и ещё {len(worst) - 3}" if len(worst) > 3 else ""
+    report.add(
+        warning(
+            "urdf.collision_mesh_heavy",
+            f"profile:{profile.name}.description",
+            f"геометрия столкновений — подробные меши: {len(heavy)} из "
+            f"{len(model.collision_meshes)}, треугольников всего "
+            f"{sum(c for _, _, c in heavy)}. "
+            f"Тяжелейшие: {listed}{tail}. Порог {COLLISION_TRIANGLES_MAX} на меш",
+            hint=(
+                "эти треугольники солвер обходит на каждом шаге физики, а не на "
+                "каждом кадре. Во сколько раз мир отстанет от стены, во столько же "
+                f"реже придёт состояние, обещанное контрактом на "
+                f"{profile.contract.state_rate_hz:g} Гц. В <collision> ставят примитив "
+                "по габариту звена или упрощённый меш; <visual> остаётся как есть"
+            ),
+            adr="ADR-0073",
+            detail={
+                # Not "meshes": in this area that key is a list of references
+                # (``urdf.mesh_not_found``), and one name for two shapes is how a
+                # reader of a report learns to check the code first (ADR-0007).
+                "collision_meshes": [
+                    {"link": link, "mesh": name, "triangles": count}
+                    for link, name, count in sorted(heavy)
+                ],
+                "max_triangles": COLLISION_TRIANGLES_MAX,
+            },
+        )
+    )

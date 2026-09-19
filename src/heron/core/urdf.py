@@ -18,9 +18,10 @@ to the message explaining what was compared with what.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import IO, Final
 from xml.etree import ElementTree as ET
 
 from .loading import LoadError, SchemaProblem
@@ -43,6 +44,29 @@ FILE_SCHEME: Final = "file://"
 
 WORLD_LINK: Final = "world"
 """The link simulators and ``robot_state_publisher`` treat as the fixed frame."""
+
+
+STL_HEADER: Final = 84
+"""Bytes before the first triangle of a binary STL: 80 of comment, 4 of count."""
+
+STL_TRIANGLE: Final = 50
+"""Bytes one triangle of a binary STL occupies: twelve floats and two spare."""
+
+STL_FACET: Final = b"facet normal"
+"""How the ASCII form of STL opens each triangle."""
+
+
+@dataclass(frozen=True, slots=True)
+class CollisionMesh:
+    """A mesh a link offers the physics engine to collide with.
+
+    Separate from the visual mesh of the same link and never interchangeable with
+    it, however often a CAD export writes one file into both: what is drawn costs
+    a frame, what collides costs every physics step.
+    """
+
+    link: str
+    filename: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +114,13 @@ class UrdfModel:
     links: tuple[str, ...]
     meshes: tuple[str, ...]
     """Every ``filename`` a ``<mesh>`` refers to, in document order."""
+
+    collision_meshes: tuple[CollisionMesh, ...] = ()
+    """Those of ``meshes`` a ``<collision>`` names, with the link that owns each.
+
+    A subset, read in the same pass over the same document, not a second list of
+    meshes: what makes it worth naming apart is who pays for it. A visual mesh is
+    drawn; a collision mesh is walked by the solver on every step of the world."""
 
     tree: ET.Element = field(compare=False, repr=False, default_factory=lambda: ET.Element("robot"))
     """The document as read. The generator merges into a copy of it."""
@@ -240,14 +271,67 @@ def parse_urdf_text(text: str, path: Path) -> UrdfModel:
         for mesh in root.iter("mesh")
         if (filename := mesh.get("filename")) is not None
     ]
+    collision_meshes = [
+        CollisionMesh(link=element.get("name", ""), filename=filename)
+        for element in root.findall("link")
+        for collision in element.findall("collision")
+        for mesh in collision.iter("mesh")
+        if (filename := mesh.get("filename")) is not None
+    ]
     return UrdfModel(
         name=root.get("name", ""),
         path=path,
         joints=tuple(joints),
         links=tuple(links),
         meshes=tuple(meshes),
+        collision_meshes=tuple(collision_meshes),
         tree=root,
     )
+
+
+def triangle_count(path: Path) -> int | None:
+    """Triangles in a mesh file, or ``None`` when this reader cannot say.
+
+    STL only, and deliberately: it is what CAD writes when a machine is exported
+    for simulation, which is where a collision mesh of a hundred thousand
+    triangles comes from in the first place. For a binary file the count is a
+    field of the format and costs one read of 84 bytes; for the ASCII form it is
+    the number of facets. Any other format is answered ``None`` rather than
+    guessed at -- a warning carrying a number nobody measured is worse than no
+    warning, because it is believed.
+    """
+    if path.suffix.lower() != ".stl":
+        return None
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(STL_HEADER)
+            if len(head) < STL_HEADER:
+                return None
+            declared = int.from_bytes(head[80:STL_HEADER], "little")
+            if path.stat().st_size == STL_HEADER + declared * STL_TRIANGLE:
+                return declared
+            # Not the binary layout: the ASCII form, where one facet is one
+            # triangle. Counted on the bytes, because the file is someone else's
+            # and need not decode.
+            handle.seek(0)
+            return sum(chunk.count(STL_FACET) for chunk in _chunks(handle))
+    except OSError:
+        return None
+
+
+def _chunks(handle: IO[bytes], size: int = 1 << 20) -> Iterator[bytes]:
+    """The file in pieces that overlap by one byte less than the phrase sought.
+
+    One less, exactly: enough that a facet split across a boundary is still
+    whole in some piece, and too little for a whole facet to sit inside an
+    overlap and be counted twice. Read in pieces because a collision mesh worth
+    warning about can be a hundred megabytes, and the reader that measures it
+    should not need them in memory.
+    """
+    tail = b""
+    while piece := handle.read(size):
+        yield tail + piece
+        tail = piece[-(len(STL_FACET) - 1) :]
 
 
 def parse_urdf(path: Path) -> UrdfModel:

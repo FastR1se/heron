@@ -520,6 +520,7 @@ Foxglove. Воспроизведения по ней — роли `replay` — �
 | `urdf.joint_not_in_contract` | подвижный сустав модели платформе неизвестен (предупреждение) |
 | `urdf.mesh_not_found`, `mjcf.mesh_not_found` | модель ссылается на меш, которого нет |
 | `urdf.mesh_unresolvable` | ссылку на меш разрешает только ROS 2 или симулятор (предупреждение) |
+| `urdf.collision_mesh_heavy` | `<collision>` ссылается на подробный меш: солвер обходит его каждый шаг физики (предупреждение, [ADR-0073](docs/decisions/0073-collision-geometry-is-checked-before-the-run.md)) |
 | `urdf.free_base_uncontrolled` | база свободна, а встроенный контроллер отключён — условие прогона (предупреждение, [ADR-0018](docs/decisions/0018-free-base-is-a-run-condition.md)) |
 | `mjcf.differs_from_urdf` | два описания робота расходятся в пределах; печатаются оба числа (предупреждение) |
 
