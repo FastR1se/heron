@@ -703,11 +703,18 @@ def test_an_observed_effort_is_published_and_not_handed_to_the_trajectory_contro
 
 
 def test_a_spawner_waits_for_the_switch_as_long_as_for_the_manager() -> None:
-    """Both wait for the world to have started; the spawner's own default for the
-    switch is 5 s, which a slow first start of a simulation outlasts (ADR-0060)."""
+    """All three wait for the world to have started; the spawner's own defaults for
+    the switch (5 s) and for the answer about it (10 s) are outlasted by a slow first
+    start of a simulation (ADR-0060).
+
+    The third is the one that fails loudest: a spawner that stops waiting before the
+    deadline it gave the manager asks for the same switch again, ``STRICT`` finds the
+    controller already active, and the run of 2026-09-20 lost both controllers to a
+    switch that had in fact been performed."""
     arguments = list(spawner(names.TRAJECTORY_CONTROLLER_NAME).arguments)
     timeout = arguments[arguments.index("--controller-manager-timeout") + 1]
     assert arguments[arguments.index("--switch-timeout") + 1] == timeout == SPAWNER_TIMEOUT
+    assert arguments[arguments.index("--service-call-timeout") + 1] == timeout
 
 
 def test_a_command_class_robot_gets_a_trajectory_controller_that_sees_a_stop(

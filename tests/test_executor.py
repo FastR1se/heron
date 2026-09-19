@@ -138,6 +138,72 @@ def test_state_that_stops_arriving_stops_the_robot() -> None:
     assert result.reason is not None and "не обновлялось" in result.reason
 
 
+def test_a_world_slower_than_the_wall_is_named_as_such() -> None:
+    """The failure of the Gazebo run of 2026-09-20: the link was alive and the
+    simulation was not keeping up.
+
+    From the wall alone the two look the same -- readings that arrive late -- and
+    the watchdog said "state stopped arriving", which sent the search after the
+    controllers. The stamps of the readings that did arrive say which clock is
+    slow, and they are already in hand."""
+    profile = make_profile(contract=_rate(20.0))  # 0.5 s watchdog, 0.02 s of world per Hz
+    clock = ManualClock()
+
+    class SlowWorld:
+        """A live link to a world running at a twelfth of wall time."""
+
+        def __init__(self) -> None:
+            self.stamp = 100.0
+            self.began = 0.0
+            self.reads = 0
+            self.stopped = False
+
+        def __getattr__(self, item: str) -> object:
+            return getattr(inner, item)
+
+        def read_state(self) -> RobotState:
+            self.reads += 1
+            if self.reads == 1:
+                self.began = clock.current
+            else:
+                clock.current += 0.5  # half a second of wall spent on one reading
+            if self.reads == 2:
+                # Everything the world managed since the first reading: a twelfth
+                # of the wall time that passed. After this one it manages nothing.
+                self.stamp += (clock.current - self.began) / 12
+            return RobotState(timestamp=self.stamp, joint_position=(0.0, 0.0, 0.0))
+
+        def emergency_stop(self) -> None:
+            self.stopped = True
+
+    inner = DummyAdapter()
+    inner.connect(profile, {})
+    link = SlowWorld()
+
+    result = Executor(link, profile, clock=clock).run(  # type: ignore[arg-type]
+        MoveJointsSkill(), {"target": [0.5, 0.0, 0.0], "duration": 10.0}
+    )
+
+    assert result.status is Status.FAILURE
+    assert link.stopped, "робот останавливается раньше, чем сообщён отказ"
+    assert result.reason is not None
+    assert "не обновлялось" in result.reason, "порог остаётся настенным (ADR-0015)"
+    assert "медленнее стены" in result.reason
+    assert "×0.08" in result.reason, result.reason
+    assert "1.7 Гц" in result.reason, "во что 20 Гц контракта превращаются на стене"
+
+
+def test_a_silent_link_is_not_blamed_on_a_slow_world() -> None:
+    """The other half of the same message: state that simply stopped arriving says
+    nothing about the world, and the report does not invent an opinion about it."""
+    profile = make_profile()
+    result = Executor(FrozenAdapter(profile), profile, clock=ManualClock()).run(  # type: ignore[arg-type]
+        MoveJointsSkill(), {"target": [0.5, 0.0, 0.0], "duration": 1.0}
+    )
+    assert result.reason is not None and "не обновлялось" in result.reason
+    assert "мир" not in result.reason, "об одном показании о мире сказать нечего"
+
+
 def test_waiting_for_the_link_is_not_silence() -> None:
     """Regression, found by the first humanoid run: the watchdog tripped after
     two ticks with "1.009 s of silence".

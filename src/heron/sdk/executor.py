@@ -55,6 +55,13 @@ At 100 Hz ten periods is a tenth of a second, which a loaded machine loses to a
 garbage collection. The floor says what the ratio cannot: below half a second,
 silence is not yet evidence."""
 
+SLOW_WORLD: Final = 0.9
+"""Below this share of wall time, the world is called out as the slower clock.
+
+Not a threshold anything is decided by -- the watchdog trips on the wall alone --
+only on how the failure is described. A tenth is scheduling; a simulation that
+cannot keep up runs at a fraction, and the first one measured ran at 0.08."""
+
 MAX_TICKS: Final = 1_000_000
 """Upper bound on one skill, so that a skill which never terminates ends the
 run instead of owning the process."""
@@ -266,6 +273,10 @@ class Executor:
         seen: list[RobotState] = []
         fresh_at = self.clock.now()
         last_stamp: float | None = None
+        # The two clocks, kept side by side from the first reading on, so that a
+        # watchdog that trips can say which of them stopped (``_trip``).
+        first_at: float = fresh_at
+        first_stamp: float | None = None
 
         for tick in range(1, max_ticks + 1):
             if cancel is not None and (why := cancel.reason) is not None:
@@ -283,9 +294,24 @@ class Executor:
             # counting that wait as silence trips the watchdog on a link that has
             # only just started talking -- the first humanoid run did exactly that.
             if last_stamp is None or state.timestamp != last_stamp:
+                if first_stamp is None:
+                    first_at, first_stamp = read_at, state.timestamp
                 last_stamp, fresh_at = state.timestamp, read_at
             elif read_at - fresh_at > self.watchdog:
-                return self._trip(skill, label, tick, seen, ctx, read_at - fresh_at)
+                began = first_stamp if first_stamp is not None else last_stamp
+                return self._trip(
+                    skill,
+                    label,
+                    tick,
+                    seen,
+                    ctx,
+                    read_at - fresh_at,
+                    world=last_stamp - began,
+                    # Wall time up to the last reading that did arrive, not up to
+                    # now: counting the silence itself into the pace of the world
+                    # would make a link that died look like a simulation lagging.
+                    wall=fresh_at - first_at,
+                )
 
             ctx.current_time = state.timestamp
             try:
@@ -337,14 +363,52 @@ class Executor:
         seen: list[RobotState],
         ctx: AdapterContext,
         silence: float,
+        *,
+        world: float = 0.0,
+        wall: float = 0.0,
     ) -> RunResult:
-        """The watchdog: state stopped arriving (section 12)."""
+        """The watchdog: state stopped arriving (section 12).
+
+        The threshold is a wall-clock one and stays one -- silence is a fact about
+        the link (ADR-0015). What is added here is the other clock's answer to the
+        same question, because the run this was written for had a live link and a
+        world that was not keeping up, and the two look identical from the wall
+        alone: readings that arrive late. Both numbers are measured, not guessed,
+        and the second one is already in hand -- the stamps of the readings that
+        did arrive.
+        """
         reason = (
             f"состояние не обновлялось {silence:.3f} с при пороге "
             f"{self.watchdog:.3f} с ({WATCHDOG_PERIODS} периодов при "
             f"{self.profile.contract.state_rate_hz:g} Гц)"
         )
-        return self._halt(skill, label, tick, seen, ctx, reason)
+        return self._halt(skill, label, tick, seen, ctx, f"{reason}{self._clocks(world, wall)}")
+
+    def _clocks(self, world: float, wall: float) -> str:
+        """What the world's clock did meanwhile, when that is the more likely culprit.
+
+        Said only when the two clocks disagree over the part of the run in which
+        state did arrive: a link that goes silent while the world keeps time needs
+        no sentence about the world, and one reading is no evidence about either.
+        """
+        if wall <= 0:
+            return ""
+        if world <= 0:
+            # Stamps moved -- that is what ``wall`` measures -- but not forward.
+            return (
+                f". Метка времени мира при этом не росла: {world:+.3f} с за {wall:.3f} с "
+                f"стены. Часы мира шли назад: симулятор перезапускали посреди прогона?"
+            )
+        pace = world / wall
+        if pace >= SLOW_WORLD:
+            return ""
+        return (
+            f". Мир идёт медленнее стены: {world:.3f} с мира за {wall:.3f} с стены "
+            f"(×{pace:.2f}), то есть {self.profile.contract.state_rate_hz * pace:.1f} Гц "
+            f"состояния по стене вместо {self.profile.contract.state_rate_hz:g}. "
+            f"Порог сторожа выведен из частоты контракта и меряется по стене (ADR-0015): "
+            f"связь цела, не успевает симуляция"
+        )
 
     def _stop(self, skill: Skill, cause: BaseException | None = None) -> str | None:
         """Stop the robot and cancel the skill. Returns why stopping failed, if it did.

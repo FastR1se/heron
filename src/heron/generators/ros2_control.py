@@ -62,14 +62,26 @@ registers it and a profile writes it."""
 
 SPAWNER_TIMEOUT: Final = "60"
 """How long a spawner waits for the world to come up: for the controller manager to
-appear, and for the switch that activates its controller.
+appear, for the switch that activates its controller, and for the answer about that
+switch.
 
-Both are the same condition -- a world that has started -- and are given the same
+All three are the same condition -- a world that has started -- and are given the same
 deadline, which ends the moment the condition holds. The switch is performed in the
 manager's update loop, which runs only while the simulation steps; the spawner's own
 default for it is 5 s, "useful when switching cannot be performed immediately, e.g.,
 paused simulations at startup" (``spawner.py``, jazzy). Left at that default, a slow
-first start failed one controller and not the next (journal 2026-09-19)."""
+first start failed one controller and not the next (journal 2026-09-19).
+
+The third is not a detail of the same wait but the one that decided the run of
+2026-09-20. A client that gives up before the deadline it gave the server asks the
+same question twice, and the second question is a different question: the switch it
+requested has meanwhile been performed, so ``STRICT`` finds the controller already
+active, refuses the switch -- "Aborting, no controller is switched!" -- and the
+spawner dies reporting failure for a controller that is running. ``--switch-timeout``
+is sent to the manager as the deadline of the request; ``--service-call-timeout``
+bounds how long the spawner itself waits for the reply, and its default is 10 s
+(``service_caller``, ros2_control 4.21+). Sixty against ten is what "failed getting a
+result ... in 10.0" meant, three times, before the abort."""
 
 HARDWARE_PLUGIN: Final = "gz_ros2_control/GazeboSimSystem"
 """Hardware component of the simulator that owns the physics (ADR-0002)."""
@@ -304,6 +316,11 @@ def spawner(controller: str) -> LaunchNode:
 
     A spawner waits for a controller manager that only exists once the simulator
     has loaded the model; it waits with its own timeout, not a generated sleep.
+
+    One deadline, three flags: the manager has to appear, the switch has to be
+    performed, and the answer about it has to come back. Asking for less patience
+    on the last than on the middle one is what turns a slow start into a failed
+    controller (``SPAWNER_TIMEOUT``).
     """
     return LaunchNode(
         package="controller_manager",
@@ -314,6 +331,7 @@ def spawner(controller: str) -> LaunchNode:
             "--controller-manager", "controller_manager",
             "--controller-manager-timeout", SPAWNER_TIMEOUT,
             "--switch-timeout", SPAWNER_TIMEOUT,
+            "--service-call-timeout", SPAWNER_TIMEOUT,
         ),
     )
 
