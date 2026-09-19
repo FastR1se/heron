@@ -1,42 +1,55 @@
-"""Read-only probe of an RC-series robot controller -- phase 5, stage 0.
+"""Read-only probe of an RC-series robot controller -- phase 5, stage 0 and stage 4 ``probe``.
 
-Answers the facts of ``docs/plans/phase5-rc5.md`` that no document states: which
-ports the vendor API opens, how often real-time data changes, what the robot calls
-itself, whether a reading carries a controller timestamp. It sends no motion
-command, sets no controller state and changes no setting.
+Answers the facts of ``docs/plans/phase5-rc5.md`` that no document states. It sends no
+motion command, sets no controller state and changes no setting.
 
-Two modes, chosen on the command line:
+Written first in session 16, before the vendor's source was at hand; rewritten in stage
+3 against API 1.4.1 and the package ``robopro_rc``, whose reading of the real-time
+packet it uses (ADR-P5B), so that the probe exercises on the robot the same copy the
+adapter will rely on.
+
+Modes, chosen on the command line:
 
 ``read_only`` (default)  RTD socket only, parallel with the vendor GUI.
-``--full``               also the control socket, for ``get_robot_info``. It still
-                         moves nothing, but it takes control from the GUI: the GUI
-                         must not be driving the robot.
+``--full``               also the control socket: ``get_robot_info`` (0.22) and the
+                         scale the controller reports. Moves nothing, but takes control
+                         from the GUI: the GUI must not be driving the robot.
 
-The vendor API is not a package on an index; it ships as a zip archive. Point
-``--api-dir`` at the directory that contains the ``API`` package.
+Steps, each optional:
 
-    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api
+``--stamps S``   S seconds of packets: sec/nsec, cycle_time, cycle_duty -- the unit of
+                 cycle_time and the monotonicity of the stamps (0.31, 0.47).
+``--watch S``    S seconds of every change of safety status, controller state, mode,
+                 brakes and connection, while a human presses the emergency button
+                 (0.25). With ``ignore_controller_exceptions`` as the adapter runs it.
+``--pairs N``    N poses set by a human in the vendor GUI; for each, the probe waits for
+                 Enter and records ``act_q`` / ``act_flange_x`` (ADR-0055). Compare with
+                 ``python -m robopro_rc.kinematics <json> --urdf examples/robots/rc5/rc5.urdf``.
+
+    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --json probe.json
     python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --full
-
-Output is a readable log on stdout and, with ``--json``, the same facts as JSON.
+    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --watch 60
+    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --pairs 5 \\
+        --json pairs.json
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
+import dataclasses
+import itertools
 import json
+import logging
 import os
 import platform
 import shutil
-import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-SAMPLE_SECONDS = 2.0
+log_sdk = logging.getLogger("phase5-probe.sdk")
 
 
 def log(message: str) -> None:
@@ -58,106 +71,161 @@ def sockets_of_this_process(host: str) -> list[str]:
     return [line for line in result.stdout.splitlines() if marker in line and host in line]
 
 
-def sample_joints(robot: Any, seconds: float) -> dict[str, Any]:
-    """Read joint angles as fast as the API answers and count distinct readings."""
-    readings: list[tuple[float, tuple[float, ...]]] = []
+def read(robot: Any) -> Any:
+    """One packet, copied as the adapter copies it."""
+    from robopro_rc.sdk import copy_rtd
+
+    return copy_rtd(robot._rtd_receiver.get_data())
+
+
+def stamps(robot: Any, seconds: float) -> dict[str, Any]:
+    """Distinct packets for ``seconds``: how the stamp moves and what cycle_time says."""
+    seen: list[tuple[int, int, float, float, float]] = []
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        joints = robot.motion.joint.get_actual_position(units="deg")
-        readings.append((time.monotonic(), tuple(float(v) for v in joints)))
-
-    changes = [
-        readings[i][0] for i in range(1, len(readings)) if readings[i][1] != readings[i - 1][1]
+        data = robot._rtd_receiver.get_data()
+        item = (int(data.sec), int(data.nsec), float(data.cycle_time), float(data.cycle_duty),
+                time.monotonic())
+        if not seen or item[:2] != seen[-1][:2]:
+            seen.append(item)
+        time.sleep(0.0005)
+    steps = [
+        (b[0] - a[0]) * 1e9 + (b[1] - a[1]) for a, b in itertools.pairwise(seen)
     ]
-    gaps = [changes[i] - changes[i - 1] for i in range(1, len(changes))]
     return {
-        "calls": len(readings),
-        "calls_per_s": len(readings) / seconds,
-        "distinct_changes": len(changes),
-        "changes_per_s": len(changes) / seconds,
-        "median_change_gap_ms": statistics.median(gaps) * 1e3 if gaps else None,
-        "first_deg": readings[0][1] if readings else None,
-        "last_deg": readings[-1][1] if readings else None,
-        "note": (
-            "неподвижный робот может давать одно и то же показание: частота изменений "
-            "тогда меньше частоты RTD, и это надо видеть, а не читать как частоту"
-        ),
+        "packets": len(seen),
+        "packets_per_s": len(seen) / seconds,
+        "stamp_steps_ns_min": min(steps) if steps else None,
+        "stamp_steps_ns_max": max(steps) if steps else None,
+        "backwards": sum(1 for step in steps if step <= 0),
+        "cycle_time_first": seen[0][2] if seen else None,
+        "cycle_time_last": seen[-1][2] if seen else None,
+        "cycle_duty_last": seen[-1][3] if seen else None,
+        "first_stamp": seen[0][:2] if seen else None,
+        "wall_clock_at_first": time.time() - (time.monotonic() - seen[0][4]) if seen else None,
+        "note": "шаг меток против числа пакетов в секунду даёт единицу cycle_time (0.31); "
+        "backwards > 0 — метки не монотонны (0.47)",
     }
 
 
-def rtd_fields(robot: Any) -> dict[str, Any]:
-    """Public attributes reachable from the robot object that look like timestamps.
+def watch(robot: Any, seconds: float) -> list[dict[str, Any]]:
+    """Every change of what the adapter reads, while a human presses the button (0.25)."""
+    changes: list[dict[str, Any]] = []
+    last: tuple[Any, ...] | None = None
+    started = time.monotonic()
+    log(f"наблюдение {seconds:g} с: нажмите кнопку аварийного останова, затем отпустите")
+    while time.monotonic() - started < seconds:
+        connected = robot.is_connected()
+        try:
+            packet = read(robot)
+            now = (connected, packet.safety, packet.controller_state, packet.motion_mode,
+                   packet.brakes_released, packet.state_flags)
+        except Exception as exc:  # the probe records, it does not decide
+            now = (connected, f"ошибка чтения: {exc}")
+        if now != last:
+            entry = {"t": round(time.monotonic() - started, 3), "state": now}
+            changes.append(entry)
+            log(f"  {entry}")
+            last = now
+        time.sleep(0.005)
+    return changes
 
-    A guess at names is not a fact: the list is printed so that a human reads the
-    API source for the answer, not so that the probe decides it.
-    """
-    found: dict[str, Any] = {}
-    for owner_name in ("", "motion", "safety_status", "controller_state"):
-        owner = getattr(robot, owner_name) if owner_name else robot
-        for name in dir(owner):
-            if name.startswith("__"):
-                continue
-            if any(key in name.lower() for key in ("time", "stamp", "tick", "rtd")):
-                found[f"{owner_name or 'robot'}.{name}"] = type(getattr(owner, name, None)).__name__
-    return found
+
+def pairs(robot: Any, count: int) -> list[dict[str, Any]]:
+    """Poses set by a human; for each, the angles and the flange the controller computed."""
+    recorded: list[dict[str, Any]] = []
+    for index in range(count):
+        input(f"поза {index + 1}/{count}: выставьте робота в «Пульсе», уберите руки, Enter ")
+        packet = read(robot)
+        if any(abs(v) > 1e-3 for v in packet.qd):
+            log("  робот движется: поза не записана, повторите")
+            continue
+        recorded.append({"act_q": list(packet.q), "act_flange_x": list(packet.flange),
+                         "stamp": [packet.sec, packet.nsec]})
+        log(f"  act_q {packet.q}\n  act_flange_x {packet.flange}")
+    return recorded
 
 
-def probe(host: str, full: bool) -> dict[str, Any]:
+def probe(args: argparse.Namespace) -> dict[str, Any]:
     from API.rc_api import RobotApi  # type: ignore[import-not-found]
 
+    full = args.full
     facts: dict[str, Any] = {
-        "host": host,
+        "host": args.host,
         "mode": "full" if full else "read_only",
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "api_module": str(Path(sys.modules["API"].__file__ or "").parent),
     }
-    log(f"подключение к {host} в режиме {facts['mode']}")
-    robot = RobotApi(host, read_only=not full, autoconnect=False, timeout=5)
-    with contextlib.suppress(Exception):
-        robot.controller_state.set_confirm_position_callback(refuse_position_confirmation)
+    log(f"подключение к {args.host} в режиме {facts['mode']}")
+    hook = sys.excepthook
+    robot = RobotApi(args.host, ignore_controller_exceptions=True, read_only=not full,
+                     autoconnect=False, timeout=5, logger=log_sdk)
+    sys.excepthook = hook  # ADR-0053: the SDK installs its shutdown as the process's hook
+    robot.controller_state.set_confirm_position_callback(refuse_position_confirmation)
+    lost: list[float] = []
+    robot.set_disconnection_callback(lambda: lost.append(time.monotonic()))
 
     started = time.monotonic()
-    connected = robot.connect(read_only=not full)
+    try:
+        connected = robot.connect(read_only=not full)
+    except Exception as exc:
+        connected = False
+        facts["connect_error"] = repr(exc)
     facts["connect"] = {"ok": bool(connected), "seconds": time.monotonic() - started}
     if not connected:
-        log("подключение не установлено: адрес, сеть, режим или несовместимость версий (0.6)")
+        robot.disconnect()
+        log("подключение не установлено: адрес, сеть, режим или «Пульс» держит управление")
         return facts
     try:
-        facts["sockets"] = sockets_of_this_process(host)
+        facts["sockets"] = sockets_of_this_process(args.host)
+        first = read(robot)
+        facts["reading"] = dataclasses.asdict(first)
         facts["safety_status"] = robot.safety_status.get()
         facts["controller_state"] = robot.controller_state.get()
         facts["motion_mode"] = robot.motion.mode.get()
         facts["warning"] = robot.motion.mode.check_warning_status()
-        facts["scale"] = robot.motion.scale_setup.get() if full else "только full"
         if full:
             info = robot.get_robot_info()
             facts["robot_info"] = {
-                "robot_model": getattr(info, "robot_model", None),
-                "client_version": getattr(info, "client_version", None),
-                "dh_model": repr(getattr(info, "dh_model", None)),
+                "robot_model": info.robot_model,
+                "client_version": info.client_version,
+                "dh_model": repr(info.dh_model),
+                "is_default": info == type(info)(),
             }
-        facts["joints"] = sample_joints(robot, SAMPLE_SECONDS)
-        facts["timestamp_like_fields"] = rtd_fields(robot)
+            facts["scale_setup"] = robot.motion.scale_setup.get()
+            facts["act_vel_scale"] = first.velocity_scale
+        if args.stamps:
+            facts["stamps"] = stamps(robot, args.stamps)
+        if args.watch:
+            facts["watch"] = watch(robot, args.watch)
+        if args.pairs:
+            facts["pairs"] = pairs(robot, args.pairs)
+        facts["link_lost_at"] = lost
     finally:
         robot.disconnect()
     return facts
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--host", required=True, help="IPv4 контроллера, например 192.168.10.10")
-    parser.add_argument("--api-dir", required=True, type=Path, help="каталог с пакетом API")
+    parser.add_argument("--api-dir", type=Path, help="каталог с пакетом API, если он не установлен")
     parser.add_argument("--full", action="store_true", help="управляющий сокет, без движения")
+    parser.add_argument("--stamps", type=float, default=2.0, help="секунд серии меток (0 — нет)")
+    parser.add_argument("--watch", type=float, default=0.0, help="секунд наблюдения кнопки")
+    parser.add_argument("--pairs", type=int, default=0, help="сколько поз записать")
     parser.add_argument("--json", type=Path, help="куда записать факты")
     args = parser.parse_args()
 
-    if not (args.api_dir / "API").is_dir():
-        log(f"в {args.api_dir} нет пакета API: укажите каталог, распакованный из архива")
-        return 2
-    sys.path.insert(0, str(args.api_dir))
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if args.api_dir is not None:
+        if not (args.api_dir / "API").is_dir():
+            log(f"в {args.api_dir} нет пакета API: укажите каталог, распакованный из архива")
+            return 2
+        sys.path.insert(0, str(args.api_dir))
 
-    facts = probe(args.host, args.full)
+    facts = probe(args)
     text = json.dumps(facts, ensure_ascii=False, indent=2, default=str)
     log(text)
     if args.json is not None:

@@ -27,10 +27,11 @@ jobs:
 
       # Фаза 4: пакет робота ставится рядом с платформой, как пакет производителя
       # (ADR-0021). Общий набор адаптеров пакет прогоняет из своих тестов (ADR-0056).
-      - name: Поставить ядро с dev-зависимостями и пакет робота
+      # Фаза 5: пакет RC — тем же путём; SDK производителя здесь нет и не нужен.
+      - name: Поставить ядро с dev-зависимостями и пакеты роботов
         run: |
           uv venv --python 3.11
-          uv pip install -e ".[dev]" -e examples/plugins/unitree_g1
+          uv pip install -e ".[dev]" -e examples/plugins/unitree_g1 -e examples/plugins/robopro_rc
 
       # Фаза 4: описание G1 — вход производителя, в репозитории лежат только
       # источник и коммит (ADR-0017). Без загрузки тесты на настоящем файле
@@ -45,6 +46,7 @@ jobs:
         run: |
           uv run mypy
           uv run mypy examples/plugins/unitree_g1/src
+          uv run mypy examples/plugins/robopro_rc/src
 
       - name: Тесты
         run: uv run pytest -v
@@ -52,6 +54,10 @@ jobs:
       # Тесты пакета — на записывающем канале, без CycloneDDS и SDK (ADR-0029).
       - name: Тесты пакета робота
         run: uv run pytest -v examples/plugins/unitree_g1/tests
+
+      # Фаза 5: адаптер RC на записывающем канале и на заменителе SDK (ADR-0053, ADR-P5B).
+      - name: Тесты пакета RC
+        run: uv run pytest -v examples/plugins/robopro_rc/tests
 
   core-without-robots:
     name: Инвариант 1 — ядро без роботов
@@ -107,6 +113,14 @@ jobs:
       - name: Командный класс на dummy и план прогона на железе
         run: |
           uv run heron run examples/scenarios/rest_bench.yaml --registry examples/robots
+          uv run heron validate examples/robots/rc5/profile.yaml
+          uv run heron run examples/scenarios/rc5_bench.yaml --registry examples/robots
+          uv run heron run examples/scenarios/rc5_bench.yaml --registry examples/robots \
+            --target real --speed-scale 0.1 --dry-run
+          # Критерий 3 фазы 5: потоковый навык на настоящем профиле — отказ до подключения.
+          if uv run heron skill check move_joints examples/robots/rc5/profile.yaml; then
+            echo "потоковый навык принят на командном RC5"; exit 1
+          fi
           uv run heron run examples/scenarios/rest_bench.yaml --registry examples/robots \
             --target real --speed-scale 0.1 --dry-run
           if uv run heron run examples/scenarios/rest_bench.yaml --registry examples/robots \
