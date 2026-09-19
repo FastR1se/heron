@@ -42,7 +42,7 @@ from heron.generators.ros2_control import (
 from heron.generators.twin import GAZEBO, LaunchNode
 
 from .channel import COMMAND_TOPIC, STATE_TOPIC, LinkConfig, LinkConfigError, ros2_topic
-from .slots import MACHINES, SlotError, machine_for, slots_of
+from .slots import MACHINES, SlotError, is_upper_body, machine_for, slots_of
 from .twin import ADAPTER
 
 BRIDGE_PACKAGE: Final = "unitree_g1_bridge"
@@ -96,7 +96,7 @@ class G1GazeboTwin:
     def description_elements(
         self, instance: Instance, description: UrdfModel, root: Path
     ) -> list[ET.Element]:
-        _check_profile(instance.id, instance.profile)
+        _check_profile(instance.id, instance.profile, description)
         return [
             ros2_control_block(instance, description),
             simulator_plugin_block(instance, controllers_path(instance, root)),
@@ -156,11 +156,16 @@ def bridge_controller(instance: Instance, machine: int, slots: Sequence[int]) ->
     return Controller(CONTROLLER, CONTROLLER_TYPE, {name: parameters[name] for name in PARAMETERS})
 
 
-def _check_profile(robot: str, profile: RobotProfile) -> tuple[int, tuple[int, ...]]:
+def _check_profile(
+    robot: str, profile: RobotProfile, description: UrdfModel | None = None
+) -> tuple[int, tuple[int, ...]]:
     """The body and the slots of a contract the bridge can drive, or a refusal.
 
     The same refusals the adapter makes at ``connect``, made before a world exists:
-    a scene the adapter would refuse to drive is not worth starting.
+    a scene the adapter would refuse to drive is not worth starting. One more the
+    adapter cannot make, because only the twin is shown the description: an upper
+    body leaves the legs without torque, which is a mount's condition and a free
+    base's fall (ADR-P6B).
     """
     joints = profile.contract.joint_order
     if not profile.contract.action.has_gains:
@@ -172,11 +177,23 @@ def _check_profile(robot: str, profile: RobotProfile) -> tuple[int, tuple[int, .
         slots = slots_of(joints)
     except SlotError as exc:
         raise GeneratorError(f"{robot}: {exc}") from exc
-    machine = machine_for(joints)
+    upper = is_upper_body(joints)
+    machine = machine_for(joints, upper_body=upper)
     if machine is None:
         known = ", ".join(f"{len(body)} DoF" for body in MACHINES.values())
         raise GeneratorError(
             f"{robot}: контракт профиля {profile.name!r} ({len(joints)} суставов) не описывает "
-            f"ни одно тело G1, которое знает пакет ({known})"
+            f"ни одно тело G1, которое знает пакет ({known}), ни его верх без ног"
+        )
+    if upper and profile.has_real_adapter:
+        raise GeneratorError(
+            f"{robot}: контракт профиля {profile.name!r} — верх тела без ног, а профиль объявляет "
+            f"'real'; адаптер откажет при подключении (ADR-P6B)"
+        )
+    if upper and description is not None and not description.fixed_to_world:
+        raise GeneratorError(
+            f"{robot}: контракт профиля {profile.name!r} — верх тела, ноги мост оставит без "
+            f"момента, а описание {description.path.name} базу к миру не крепит: робот упал бы. "
+            f"Верх тела — только на закреплённом описании (ADR-P6A, ADR-P6B)"
         )
     return machine, slots

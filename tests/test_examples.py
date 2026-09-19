@@ -476,3 +476,146 @@ def test_the_same_mission_goes_to_hardware_by_target(examples_dir: Path, robots:
     assert result is None
     assert "мир       действительность, окружение мира не применяется" in lines
     assert "шкала     скорости 0.1" in lines
+
+
+# -- phase 6, stage 7: the G1 bolted to a stand (ADR-P6A, ADR-P6B) ---------------------
+
+MOUNTED = "g1_29dof_lock_waist_rev_1_0_mounted"
+MOUNTED_FETCH = f"python examples/robots/{MOUNTED}/fetch_description.py"
+
+
+def _mounted_profile(robots: Path) -> Path:
+    """The mounted G1's profile, skipping when its two inputs were never written."""
+    from heron.generators.common import resolve_description
+
+    path = robots / MOUNTED / "profile.yaml"
+    if not resolve_description(load_model(path, RobotProfile), path).is_file():
+        pytest.skip(f"описание {MOUNTED} не загружено: {MOUNTED_FETCH}")
+    return path
+
+
+def test_the_mounted_robot_is_the_vendors_description_plus_a_stand(robots: Path) -> None:
+    """ADR-P6A, item 1: exactly three changes to the vendor's file -- a link, a joint, a name."""
+    from xml.etree import ElementTree as ET
+
+    from heron.generators.common import resolve_description
+
+    path = _mounted_profile(robots)
+    mounted = ET.parse(resolve_description(load_model(path, RobotProfile), path)).getroot()
+    vendor_file = (
+        robots / MOUNTED / "vendor" / "unitree_ros" / "robots" / "g1_description"
+        / "g1_29dof_lock_waist_rev_1_0.urdf"
+    )
+    vendor = ET.parse(vendor_file).getroot()
+
+    assert (vendor.get("name"), mounted.get("name")) == ("g1_29dof_lock_waist_rev_1_0", MOUNTED)
+    added = [child for child in mounted if child.get("name") in ("world", "world_joint")]
+    assert [child.tag for child in added] == ["link", "joint"]
+    joint = added[1]
+    assert joint.get("type") == "fixed"
+    assert (joint.find("parent").get("link"), joint.find("child").get("link")) == (  # type: ignore[union-attr]
+        "world",
+        "pelvis",
+    )
+    assert joint.find("origin").get("xyz") == "0 0 1"  # type: ignore[union-attr]
+
+    rest = [ET.tostring(child) for child in mounted if child not in added]
+    assert rest == [ET.tostring(child) for child in vendor]
+
+
+def test_the_mounted_robot_validates_with_only_its_passive_legs_named(robots: Path) -> None:
+    """The base is held, so no free-base condition; the legs are passive links (ADR-0012)."""
+    path = _mounted_profile(robots)
+    report = check_profile(load_model(path, RobotProfile), path=path)
+    assert report.ok, [f.code for f in report.errors]
+    assert report.codes() == ["urdf.joint_not_in_contract"]
+    (finding,) = report.findings
+    assert len(finding.detail["joints"]) == 12
+    assert all(("hip" in name or "knee" in name or "ankle" in name)
+               for name in finding.detail["joints"])
+
+
+def test_the_mounted_robot_trains_on_a_fixed_base_at_the_rates_of_its_link(
+    robots: Path,
+) -> None:
+    """The derivation of ADR-0044 on the second robot of the phase, without its task."""
+    from heron.core.capabilities import Capability
+    from heron.core.models import Completion, SkillSpec
+    from heron.generators.common import resolve_description
+    from heron.train.spec import derive
+
+    path = _mounted_profile(robots)
+    profile = load_model(path, RobotProfile)
+    spec = derive(
+        scenario="g1_mounted_train",
+        robot="g1",
+        backend="isaaclab",
+        task="t",
+        profile=profile,
+        description=resolve_description(profile, path),
+        skill=SkillSpec(
+            name="t", required_capabilities=frozenset({Capability("arm.joint_position")})
+        ),
+        completion=Completion(tolerance=0.08, hold_s=0.3, horizon_s=5.0),
+    )
+    assert spec.fix_base
+    assert (spec.dt, spec.decimation) == (pytest.approx(0.002), 10)
+    assert (spec.action_size, spec.observation_size) == (15, 60)
+    assert spec.action.offset == list(profile.contract.default_pose or [])
+    assert spec.drive.kd[5] == pytest.approx(0.18), "крен запястья — kd ниже I_min/dt (ADR-P6A)"
+
+
+def test_the_mounted_robot_joins_gazebo_as_an_upper_body_on_the_bridge(
+    examples_dir: Path, robots: Path, tmp_path: Path
+) -> None:
+    """ADR-P6B through the platform's own world: the bridge drives fifteen joints of body 6,
+    the legs are read and never commanded, the description carries the stand."""
+    from xml.etree import ElementTree as ET
+
+    import yaml
+
+    from heron.sim.gazebo import GazeboBackend
+    from heron.sim.process import PlanningLauncher
+
+    _mounted_profile(robots)
+    path = examples_dir / "scenarios" / "g1_mounted.yaml"
+    scenario = load_scenario(path)
+    report = check_scenario(scenario, Registry([robots]), path=path)
+    assert report.ok, [f.code for f in report.errors]
+
+    backend = GazeboBackend(
+        Registry([robots]), into=tmp_path, launcher=PlanningLauncher(), scenario_path=path
+    )
+    files = {str(item.path): item.content for item in backend.build_world(scenario).bundle.files}
+
+    bridge = yaml.safe_load(files["g1/controllers.yaml"])["/g1/low_level_bridge"][
+        "ros__parameters"
+    ]
+    assert bridge["mode_machine"] == 6
+    assert bridge["slots"] == [12, *range(15, 29)]
+
+    description = ET.fromstring(files["g1/description.urdf"].split("?>", 1)[1])
+    assert any(
+        joint.get("name") == "world_joint" and joint.get("type") == "fixed"
+        for joint in description.iter("joint")
+    )
+    block = description.find("ros2_control")
+    assert block is not None
+    joints = list(block.iter("joint"))
+    commanded = {j.get("name") for j in joints if j.find("command_interface") is not None}
+    read_only = {str(j.get("name")) for j in joints if j.find("command_interface") is None}
+    assert commanded == set(bridge["joints"]) and len(commanded) == 15
+    assert len(read_only) == 12
+    assert all("hip" in n or "knee" in n or "ankle" in n for n in read_only)
+
+
+def test_the_goal_of_the_mounted_scene_is_the_humanoids_for_the_arms(examples_dir: Path) -> None:
+    """One arm pose across the G1 scenes: the stage 7 comparison starts from a known goal."""
+    mounted = load_scenario(examples_dir / "scenarios" / "g1_mounted.yaml").task
+    humanoid = load_scenario(examples_dir / "scenarios" / "humanoid.yaml").task
+    assert mounted is not None and humanoid is not None
+    arms_23 = humanoid.goal["target"][13:]
+    target = mounted.goal["target"]
+    left, right = target[1:8], target[8:15]
+    assert left[:5] == arms_23[:5] and right[:5] == arms_23[5:]
+    assert left[5:] == right[5:] == [0.0, 0.0]

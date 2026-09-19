@@ -1,0 +1,28 @@
+[project]
+name = "g1-upper-reach"
+version = "0.1.0"
+description = "Training task for the mounted G1: bring the upper body to a joint pose"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# The platform is a dependency like any other, and what this package takes from it
+# is its public API and nothing else (ADR-0021, ADR-0044); a test in the platform
+# reads the imports to hold it to that. The same pin as the example arm's task: the
+# scripts install both with --no-deps into an environment that already has the platform.
+#
+# Isaac Lab is deliberately not listed: it lives in the training environment, and the
+# backend declares it as an environment requirement checked before a run (ADR-0025).
+dependencies = ["heron>=0.5"]
+
+# The sixth extension point. The name is what a scenario's learner writes in its
+# `task` field, and the name the artifact is stored under.
+[project.entry-points."heron.train_tasks"]
+g1_upper_reach = "g1_upper_reach.task:G1UpperReachTask"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/g1_upper_reach"]

@@ -38,7 +38,7 @@ from .channel import (
     LowStateReading,
     MotorCommand,
 )
-from .slots import SLOT_COUNT, check_body, slots_of
+from .slots import SLOT_COUNT, BodyMismatchError, check_body, is_upper_body, slots_of
 
 REQUIREMENTS: Final[tuple[Requirement, ...]] = (
     needs(
@@ -163,6 +163,9 @@ class G1DdsAdapter:
                 f"LowCmd — это мотор без момента"
             )
         slots = slots_of(profile.contract.joint_order)
+        upper = is_upper_body(profile.contract.joint_order)
+        if upper:
+            _check_upper_body_profile(profile)
         link = LinkConfig.from_params(config)
         _check_limit_widths(profile)
 
@@ -189,7 +192,7 @@ class G1DdsAdapter:
             self._owns_channel = True
         try:
             first = self._await_link()
-            check_body(first.mode_machine, profile.contract.joint_order)
+            check_body(first.mode_machine, profile.contract.joint_order, upper_body=upper)
         except BaseException:
             self.disconnect()
             raise
@@ -360,6 +363,24 @@ class G1DdsAdapter:
             )
         return LowCommand(
             mode_pr=MODE_PR_SERIES, mode_machine=self._machine, motors=tuple(motors)
+        )
+
+
+def _check_upper_body_profile(profile: RobotProfile) -> None:
+    """An upper body over ``rt/lowcmd`` only where no robot can be on the link (ADR-P6B).
+
+    The legs of such a contract get ``mode = 0``. A mount holds them in the world this
+    profile describes (ADR-P6A); on a robot standing on the floor at the low level
+    nobody would, and it would fall. A profile that declares ``real`` says it may meet
+    such a robot, and is refused before a channel is opened: on hardware the upper
+    body goes through ``rt/arm_sdk`` while the vendor's controller keeps the legs.
+    """
+    if profile.has_real_adapter:
+        raise BodyMismatchError(
+            f"{profile.name}: контракт — верх тела G1 без ног, а профиль объявляет адаптер "
+            f"'real'. По rt/lowcmd ноги получили бы mode = 0, и стоящий робот упал бы; верх "
+            f"тела на железе идёт по rt/arm_sdk при работающем балансе (фаза 7). Верх тела "
+            f"по rt/lowcmd — только у закреплённого робота в симуляции (ADR-P6B)"
         )
 
 

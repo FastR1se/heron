@@ -21,12 +21,17 @@ from unitree_g1.adapter import (
 )
 from unitree_g1.channel import LinkConfig, LinkConfigError, MotorCommand, RecordingChannel
 from unitree_g1.slots import LAYOUT, BodyMismatchError, SlotError
-from unitree_g1.testing import LINK_PARAMS, deliver_states, profile_23dof
+from unitree_g1.testing import (
+    LINK_PARAMS,
+    deliver_states,
+    profile_23dof,
+    profile_upper_body,
+)
 
 from heron.core.contract import ActionSpec
 from heron.core.enums import ActionType
 from heron.core.environment import RequirementKind
-from heron.core.models import RobotProfile
+from heron.core.models import AdapterSpec, RobotProfile
 from heron.core.protocols import CommandRefusedError, ControlAdapter
 from heron.core.types import Command
 
@@ -103,6 +108,48 @@ def test_a_joint_outside_the_layout_is_refused_on_connect() -> None:
     )
     with pytest.raises(SlotError, match="joint0"):
         G1DdsAdapter(RecordingChannel()).connect(renamed, dict(LINK_PARAMS))
+
+
+# -- the upper body of a mounted robot (ADR-P6B) --------------------------------
+
+
+def test_an_upper_body_connects_to_its_body_and_leaves_the_legs_off() -> None:
+    profile = profile_upper_body()
+    adapter, channel, _ = connected(profile, mode_machine=6)
+    values = distinct(profile)
+    adapter.send_command(Command(type=ActionType.JOINT_POSITION, values=values))
+    command = channel.published[-1]
+    assert command.mode_machine == 6
+    for index, name in enumerate(profile.contract.joint_order):
+        assert command.motors[LAYOUT.index(name)].mode == 1, name
+        assert command.motors[LAYOUT.index(name)].q == values[index], name
+    for slot in (*range(0, 12), 13, 14, *range(29, 35)):
+        assert command.motors[slot] == MotorCommand(), slot
+
+
+def test_an_upper_body_on_another_body_is_refused() -> None:
+    with pytest.raises(BodyMismatchError, match="waist_roll_joint"):
+        connected(profile_upper_body(), mode_machine=5)
+
+
+def test_an_upper_body_in_a_profile_that_may_meet_the_robot_is_refused_before_the_link() -> None:
+    """On hardware the legs are the balance controller's; rt/lowcmd would drop them."""
+    base = profile_upper_body()
+    profile = base.model_copy(
+        update={
+            "adapters": {
+                **base.adapters,
+                "real": AdapterSpec(plugin="unitree_g1_dds", params={"domain": 0}),
+            }
+        }
+    )
+    channel = RecordingChannel()
+    deliver_states(channel, 4, mode_machine=6)
+    adapter = G1DdsAdapter(channel)
+    with pytest.raises(BodyMismatchError, match="rt/arm_sdk"):
+        adapter.connect(profile, dict(LINK_PARAMS))
+    assert channel.published == []
+    assert len(channel.readings) == 4, "канал не читался: отказ до связи"
 
 
 # -- commands ------------------------------------------------------------------

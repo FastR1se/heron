@@ -191,7 +191,7 @@ def test_importing_the_platform_imports_no_training_stack() -> None:
 
 def test_the_core_imports_no_task_of_the_examples() -> None:
     """A training task is found through an entry point, never imported by path."""
-    pattern = re.compile(r"(arm6_reach|examples)")
+    pattern = re.compile(r"(arm6_reach|g1_upper_reach|examples)")
     offenders: list[str] = []
     for path in python_files(PACKAGE):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):

@@ -17,7 +17,14 @@ from heron.core.models import AdapterSpec, JointRange, Limits, RobotProfile
 
 from .adapter import G1DdsAdapter
 from .channel import RecordingChannel
-from .slots import BODY_23DOF, LAYOUT, machine_for
+from .slots import (
+    BODY_23DOF,
+    BODY_29DOF_LOCK_WAIST,
+    LAYOUT,
+    UPPER_BODY,
+    is_upper_body,
+    machine_for,
+)
 
 PLUGIN: Final = "unitree_g1_dds"
 """The adapter's entry-point name, as a profile writes it."""
@@ -64,9 +71,41 @@ def profile_23dof(**overrides: Any) -> RobotProfile:
     return RobotProfile(**fields)
 
 
+JOINTS_UPPER_BODY_6: Final[tuple[str, ...]] = tuple(
+    name for name in LAYOUT if name in BODY_29DOF_LOCK_WAIST & UPPER_BODY
+)
+"""The upper body of ``mode_machine`` 6: waist yaw and both arms, 15 joints (ADR-P6B)."""
+
+
+def profile_upper_body(**overrides: Any) -> RobotProfile:
+    """A mounted G1 driven above the waist: body 6 without its legs, no ``real`` (ADR-P6A)."""
+    joints = list(JOINTS_UPPER_BODY_6)
+    dof = len(joints)
+    fields: dict[str, Any] = {
+        "name": "g1_upper_body_test",
+        "contract": Contract(
+            revision=1,
+            joint_order=joints,
+            angle_unit=AngleUnit.RAD,
+            state_rate_hz=500.0,
+            command_rate_hz=50.0,
+            observation=[ObservationTerm(type=ObservationType.JOINT_POS, scale=1.0)],
+            action=ActionSpec(
+                type=ActionType.JOINT_POSITION,
+                kp=[20.0 + index for index in range(dof)],
+                kd=[0.1 + index / 100 for index in range(dof)],
+            ),
+        ),
+        "limits": Limits(joint_position=JointRange(min=[-1.5] * dof, max=[1.5] * dof)),
+        "adapters": {"sim.gazebo": AdapterSpec(plugin=PLUGIN, params=dict(LINK_PARAMS))},
+    }
+    fields.update(overrides)
+    return profile_23dof(**fields)
+
+
 def machine_of(joints: Sequence[str]) -> int:
-    """The ``mode_machine`` of the body with exactly these joints."""
-    machine = machine_for(joints)
+    """The ``mode_machine`` of the body with exactly these joints, or with this upper body."""
+    machine = machine_for(joints, upper_body=is_upper_body(joints))
     if machine is None:
         raise ValueError("ни одно известное тело не состоит ровно из этих суставов")
     return machine

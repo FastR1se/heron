@@ -13,12 +13,16 @@ from unitree_g1.slots import (
     BODY_29DOF,
     BODY_29DOF_LOCK_WAIST,
     LAYOUT,
+    LEGS,
     MACHINES,
     SLOT_COUNT,
+    UPPER_BODY,
     BodyMismatchError,
     SlotError,
     check_body,
     empty_slots,
+    is_upper_body,
+    machine_for,
     slots_of,
 )
 
@@ -30,6 +34,7 @@ DESCRIPTIONS = ROBOT / "vendor" / "unitree_ros" / "robots" / "g1_description"
 TWIN_MJCF = ROBOT / "vendor" / "unitree_mujoco" / "unitree_robots" / "g1" / "g1_23dof.xml"
 PROFILE = ROBOT / "profile.yaml"
 LOCK_WAIST_PROFILE = EXAMPLES / "robots" / "g1_29dof_lock_waist_rev_1_0" / "profile.yaml"
+MOUNTED_PROFILE = EXAMPLES / "robots" / "g1_29dof_lock_waist_rev_1_0_mounted" / "profile.yaml"
 NOT_FETCHED = "описание G1 не загружено: python examples/robots/g1_23dof/fetch_description.py"
 
 TABLE_ROW = re.compile(r"^\|\s*`(?P<file>[^`]+)`\s*\|\s*(?P<machine>\d+)\s*\|", re.MULTILINE)
@@ -173,3 +178,65 @@ def test_a_23_dof_contract_on_a_29_dof_body_names_the_joints_left_limp() -> None
 def test_a_29_dof_contract_on_a_23_dof_body_names_the_joints_it_lacks() -> None:
     with pytest.raises(BodyMismatchError, match="у тела нет: waist_roll_joint"):
         check_body(4, BODY_29DOF)
+
+
+# -- the upper body (ADR-P6B) --------------------------------------------------------
+
+
+ARM_SDK_JOINTS = (
+    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
+)
+"""``arm_joints`` of the vendor's ``g1_arm7_sdk_dds_example.cpp`` (unitree_sdk2 ``9754cd1``),
+spelled out: the joints ``rt/arm_sdk`` commands while the robot balances on its own."""
+
+
+def test_the_upper_body_is_what_the_vendors_arm_sdk_commands() -> None:
+    assert frozenset(ARM_SDK_JOINTS) == UPPER_BODY
+    assert UPPER_BODY | LEGS == BODY_29DOF and not UPPER_BODY & LEGS
+    assert sorted(slots_of(sorted(UPPER_BODY))) == list(range(12, 29))
+
+
+def test_each_upper_body_names_its_body() -> None:
+    """Three different sets, so an upper body is as good an identity as a whole one."""
+    uppers = {value: body & UPPER_BODY for value, body in MACHINES.items()}
+    assert {value: len(joints) for value, joints in uppers.items()} == {4: 11, 5: 17, 6: 15}
+    for value, joints in uppers.items():
+        assert is_upper_body(joints)
+        assert machine_for(joints, upper_body=True) == value
+        assert machine_for(joints) is None
+        check_body(value, joints, upper_body=True)
+
+
+def test_a_whole_body_is_not_an_upper_body() -> None:
+    for body in MACHINES.values():
+        assert not is_upper_body(body)
+    assert not is_upper_body(())
+
+
+def test_an_upper_body_is_refused_as_a_whole_body() -> None:
+    """Without the caller saying the legs are held, a leg-less contract is ADR-0027's case."""
+    with pytest.raises(BodyMismatchError, match="left_knee_joint"):
+        check_body(6, BODY_29DOF_LOCK_WAIST & UPPER_BODY)
+
+
+def test_the_upper_body_of_6_on_body_5_names_the_waist_it_would_leave_limp() -> None:
+    with pytest.raises(BodyMismatchError, match="верх тела mode_machine = 5") as caught:
+        check_body(5, BODY_29DOF_LOCK_WAIST & UPPER_BODY, upper_body=True)
+    assert "waist_roll_joint" in str(caught.value)
+
+
+def test_the_example_mounted_profile_is_the_upper_body_of_6() -> None:
+    if not MOUNTED_PROFILE.is_file():
+        pytest.skip("профиля закреплённого G1 в examples нет")
+    order = yaml.safe_load(MOUNTED_PROFILE.read_text(encoding="utf-8"))["contract"][
+        "joint_order"
+    ]
+    assert is_upper_body(order)
+    check_body(6, order, upper_body=True)
+    assert list(order) == [name for name in LAYOUT if name in order], "порядок — порядок слотов"

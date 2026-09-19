@@ -28,7 +28,7 @@ from heron.sim.base import SimulationError
 from heron.sim.mujoco_twin import MujocoScene, TwinProcess
 
 from .channel import LinkConfig
-from .slots import MACHINES, machine_for
+from .slots import MACHINES, is_upper_body, machine_for
 
 ADAPTER: Final = "unitree_g1_dds"
 """The adapter this twin is the other side of, as its entry point is named."""
@@ -82,6 +82,12 @@ class G1MujocoTwin:
         link = LinkConfig.from_params(scene.params)
 
         joints = scene.profile.contract.joint_order
+        if is_upper_body(joints):
+            raise SimulationError(
+                f"{scene.robot}: контракт профиля {scene.profile.name!r} — верх тела без ног, "
+                f"ноги остались бы без момента, а сцена {PROGRAM} держит робота на свободной базе. "
+                f"Закреплённой сцены производителя нет (ADR-P6A, п. 4; ADR-P6B)"
+            )
         wanted = machine_for(joints)
         reported = reported_machine(scene.world)
         if wanted is None:

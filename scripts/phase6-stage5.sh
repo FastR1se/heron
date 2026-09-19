@@ -193,7 +193,10 @@ step_env() {
     # The one line, shown as a diff: this is the claim of invariant 4 as evidence.
     diff -u "$PROFILES/arm6.yaml" "$PROFILES/learned/arm6.yaml" > "$STAGE_ROOT/one-line.diff"
     local changed
-    changed="$(grep -c '^[+-][^+-]' "$STAGE_ROOT/one-line.diff")"
+    # Changed lines, not the two file headers. A YAML list item itself begins with "-", so the
+    # line removed reads "-- move_joints": the headers are excluded by name, not by the second
+    # character.
+    changed="$(grep -vE '^(\+\+\+|---) ' "$STAGE_ROOT/one-line.diff" | grep -cE '^[+-]')"
     if (( changed == 2 )); then
         record "замена навыка — одна строка" ok "см. $STAGE_ROOT/one-line.diff"
     else

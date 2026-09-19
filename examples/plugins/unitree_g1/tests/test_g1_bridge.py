@@ -31,7 +31,14 @@ from unitree_g1.bridge import (
 )
 from unitree_g1.channel import LinkConfig
 from unitree_g1.slots import LAYOUT, slots_of
-from unitree_g1.testing import JOINTS_23DOF, LINK_PARAMS, PLUGIN, profile_23dof
+from unitree_g1.testing import (
+    JOINTS_23DOF,
+    JOINTS_UPPER_BODY_6,
+    LINK_PARAMS,
+    PLUGIN,
+    profile_23dof,
+    profile_upper_body,
+)
 
 from heron.core.contract import ActionSpec, Contract, ObservationTerm
 from heron.core.enums import ActionType, AngleUnit, ObservationType, Role, TwinKind
@@ -79,9 +86,17 @@ def instance(profile: RobotProfile | None = None) -> Instance:
     )
 
 
-def description(joints: Sequence[str]) -> UrdfModel:
-    """A chain of revolute joints with these names: all the bridge's block reads."""
+def description(joints: Sequence[str], *, mounted: bool = False) -> UrdfModel:
+    """A chain of revolute joints with these names: all the bridge's block reads.
+
+    ``mounted`` bolts the pelvis to the world, as the mounted G1's description does (ADR-P6A).
+    """
     parts = ['<robot name="g1">', '<link name="pelvis"/>']
+    if mounted:
+        parts.append(
+            '<link name="world"/><joint name="world_joint" type="fixed">'
+            '<parent link="world"/><child link="pelvis"/></joint>'
+        )
     parent = "pelvis"
     for name in joints:
         child = name.removesuffix("_joint") + "_link"
@@ -314,3 +329,45 @@ def test_importing_the_bridge_twin_imports_no_dds_and_no_ros() -> None:
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "[]"
+
+
+# -- the upper body of a mounted robot (ADR-P6B) ---------------------------------
+
+
+def test_an_upper_body_on_a_mounted_description_is_bridged_as_its_body() -> None:
+    item = instance(profile_upper_body())
+    whole = [*LAYOUT[:12], *JOINTS_UPPER_BODY_6]
+    G1GazeboTwin().description_elements(item, description(whole, mounted=True), ROOT)
+
+    bridge = manager_document(G1GazeboTwin(), item)[f"/g1/{CONTROLLER}"]["ros__parameters"]
+    assert bridge["joints"] == list(JOINTS_UPPER_BODY_6)
+    assert bridge["slots"] == [12, *range(15, 29)]
+    assert bridge["mode_machine"] == 6
+
+
+def test_the_legs_of_an_upper_body_are_read_and_not_commanded() -> None:
+    """ADR-0012 as it stands: a leg of the description outside the contract is observed only."""
+    whole = [*LAYOUT[:12], *JOINTS_UPPER_BODY_6]
+    block, _ = G1GazeboTwin().description_elements(
+        instance(profile_upper_body()), description(whole, mounted=True), ROOT
+    )
+    for joint in block.iter("joint"):
+        commands = [item.get("name") for item in joint.iter("command_interface")]
+        assert commands == ([] if joint.get("name") in LAYOUT[:12] else ["effort"]), joint.get(
+            "name"
+        )
+
+
+def test_an_upper_body_on_a_free_base_gets_no_bridge() -> None:
+    whole = [*LAYOUT[:12], *JOINTS_UPPER_BODY_6]
+    with pytest.raises(GeneratorError, match="не крепит"):
+        G1GazeboTwin().description_elements(
+            instance(profile_upper_body()), description(whole), ROOT
+        )
+
+
+def test_an_upper_body_in_a_profile_that_may_meet_the_robot_gets_no_bridge() -> None:
+    base = profile_upper_body()
+    adapters = {**base.adapters, "real": AdapterSpec(plugin=PLUGIN, params={"domain": 0})}
+    with pytest.raises(GeneratorError, match="'real'"):
+        G1GazeboTwin().files(instance(base.model_copy(update={"adapters": adapters})), ROOT)

@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from unitree_g1.channel import LinkConfigError
 from unitree_g1.slots import LAYOUT
-from unitree_g1.testing import LINK_PARAMS, profile_23dof
+from unitree_g1.testing import LINK_PARAMS, profile_23dof, profile_upper_body
 from unitree_g1.twin import ADAPTER, PROGRAM, G1MujocoTwin, reported_machine
 
 from heron.core.contract import ActionSpec, Contract, ObservationTerm
@@ -111,6 +111,12 @@ def test_a_contract_of_no_known_body_is_refused() -> None:
     )
     with pytest.raises(SimulationError, match="ни одно тело G1"):
         G1MujocoTwin().processes(scene(profile=legs))
+
+
+def test_an_upper_body_is_refused_because_the_vendors_scene_is_free() -> None:
+    """ADR-P6A, item 4: the legs would go limp on a robot nothing holds."""
+    with pytest.raises(SimulationError, match="свободной базе"):
+        G1MujocoTwin().processes(scene(profile=profile_upper_body()))
 
 
 def test_the_twin_declares_the_program_and_the_display() -> None:

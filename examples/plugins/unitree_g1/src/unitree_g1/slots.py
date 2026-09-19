@@ -78,6 +78,17 @@ BODY_29DOF_LOCK_WAIST: Final = BODY_29DOF - {
 """The 29-DoF body with its waist locked: roll and pitch are fixed joints of its
 description, slots 13 and 14 empty, both wrists whole."""
 
+LEGS: Final = frozenset(LAYOUT[:12])
+"""Slots 0-11: what the vendor's balance controller keeps when the upper body is lent out."""
+
+UPPER_BODY: Final = frozenset(LAYOUT[12:])
+"""Slots 12-28: waist and arms, the joints the vendor's ``rt/arm_sdk`` example commands
+(``g1_arm7_sdk_dds_example.cpp``, unitree_sdk2 ``9754cd1``) while the robot balances on its own.
+
+Inside a body it is the body without its legs. A contract of exactly that is the one
+subset of a body the package accepts (ADR-P6B): 11 joints of body 4, 17 of body 5, 15 of
+body 6 -- three different sets, so an upper body names its body as a whole body does."""
+
 MACHINES: Final[dict[int, frozenset[str]]] = {
     4: BODY_23DOF,
     5: BODY_29DOF,
@@ -122,11 +133,20 @@ def slots_of(joint_order: Sequence[str]) -> tuple[int, ...]:
     return tuple(LAYOUT.index(name) for name in joint_order)
 
 
-def machine_for(joint_order: Iterable[str]) -> int | None:
-    """The ``mode_machine`` of the body with exactly these joints, if the package knows one."""
+def is_upper_body(joint_order: Iterable[str]) -> bool:
+    """Whether a contract names no leg: it can only be the upper body of some body, or nothing."""
+    joints = frozenset(joint_order)
+    return bool(joints) and joints <= UPPER_BODY
+
+
+def machine_for(joint_order: Iterable[str], *, upper_body: bool = False) -> int | None:
+    """The ``mode_machine`` of the body with exactly these joints, if the package knows one.
+
+    With ``upper_body``, the body whose upper body these joints are (ADR-P6B).
+    """
     wanted = frozenset(joint_order)
     for value, body in MACHINES.items():
-        if body == wanted:
+        if (body & UPPER_BODY if upper_body else body) == wanted:
             return value
     return None
 
@@ -137,12 +157,14 @@ def empty_slots(joint_order: Iterable[str]) -> frozenset[int]:
     return frozenset(slot for slot in range(SLOT_COUNT) if slot not in used)
 
 
-def check_body(mode_machine: int, joint_order: Iterable[str]) -> None:
+def check_body(mode_machine: int, joint_order: Iterable[str], *, upper_body: bool = False) -> None:
     """Refuse a link whose robot is not the body the contract commands.
 
     Equal sets, not a subset: at the low access level every motor of the body is
     commanded, and a motor the contract does not name would get zero gains and
-    hang limp while the rest of the robot moves.
+    hang limp while the rest of the robot moves. The one exception is ``upper_body``
+    (ADR-P6B): the body without its legs, for a robot whose legs hang from a mount --
+    the caller has established that, this function only checks which body it is.
     """
     body = MACHINES.get(mode_machine)
     if body is None:
@@ -152,6 +174,8 @@ def check_body(mode_machine: int, joint_order: Iterable[str]) -> None:
             f"неизвестно; известны: {known}. Команды не отправлены"
         )
     declared = frozenset(joint_order)
+    if upper_body:
+        body = body & UPPER_BODY
     if declared == body:
         return
     absent = sorted(body - declared, key=LAYOUT.index)
@@ -161,8 +185,9 @@ def check_body(mode_machine: int, joint_order: Iterable[str]) -> None:
         details.append(f"у тела есть, в контракте нет: {', '.join(absent)}")
     if foreign:
         details.append(f"в контракте есть, у тела нет: {', '.join(foreign)}")
+    what = "верх тела" if upper_body else "тело"
     raise BodyMismatchError(
-        f"на связи тело mode_machine = {mode_machine} ({len(body)} DoF), контракт "
+        f"на связи {what} mode_machine = {mode_machine} ({len(body)} DoF), контракт "
         f"описывает {len(declared)} суставов — {'; '.join(details)}. "
         f"Подключён не тот робот или не тот профиль; команды не отправлены"
     )

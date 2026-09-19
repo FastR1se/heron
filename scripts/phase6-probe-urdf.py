@@ -6,6 +6,12 @@ contract depends on are written to JSON: the DOF order PhysX assigns (fact 0.4 s
 decides it), the bodies left after merging fixed joints, and the limits and drive gains the
 converter took from the URDF. Nothing is set from the profile on purpose -- the question is what
 arrives by default, before the platform says anything.
+
+Phase 6, stage 7 (ADR-P6A) asks one more thing of it: where the bodies are in the world after the
+reset and after ``--steps`` physics steps. A description bolted to the world by a ``world`` link
+is converted with ``fix_base``, and whether the importer keeps that joint's origin -- the height
+of the G1's pelvis on its stand -- or fixes the root link where the articulation stands is not in
+Isaac Lab's source (ADR-0048 left it open). The positions answer it.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ parser.add_argument("--urdf", required=True, help="description to convert")
 parser.add_argument("--usd-dir", required=True, help="where the converted USD goes")
 parser.add_argument("--merge-fixed-joints", choices=["yes", "no"], required=True)
 parser.add_argument("--out", required=True, help="JSON with the facts")
+parser.add_argument("--steps", type=int, default=0, help="steps before a second reading")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 print("[probe] запуск Kit", flush=True)
@@ -80,7 +87,17 @@ def main() -> None:
         "joint_stiffness": first(data.joint_stiffness),
         "joint_damping": first(data.joint_damping),
         "default_joint_pos": first(data.default_joint_pos),
+        "root_pos_w": first(data.root_pos_w),
+        "body_pos_w": first(data.body_pos_w),
     }
+    if args.steps:
+        mark(f"{args.steps} шагов физики")
+        for _ in range(args.steps):
+            sim.step()
+            robot.update(sim.get_physics_dt())
+        facts["steps"] = args.steps
+        facts["root_pos_w_after"] = first(data.root_pos_w)
+        facts["body_pos_w_after"] = first(data.body_pos_w)
     Path(args.out).write_text(json.dumps(facts, indent=2), encoding="utf-8")
     print(json.dumps(facts, indent=2))
 
