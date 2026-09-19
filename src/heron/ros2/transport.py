@@ -562,7 +562,7 @@ def _import_ros2(module: str) -> Any:
         install = names.ADAPTER_PACKAGES.get(root, "desktop")
         raise TransportError(
             f"{module} не импортируется: окружение ROS 2 не подключено. "
-            f"Нужен пакет ros-<дистрибутив>-{install}; его ставит scripts/phase0.sh. "
+            f"Нужен пакет ros-<дистрибутив>-{install}; его ставит scripts/install.sh install ros2. "
             f"Проверьте, что окружение подключено: source /opt/ros/<дистрибутив>/setup.bash"
         ) from exc
 

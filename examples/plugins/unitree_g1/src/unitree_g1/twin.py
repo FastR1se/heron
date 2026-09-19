@@ -42,9 +42,9 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = (
         RequirementKind.EXECUTABLE,
         PROGRAM,
         because="двойник производителя — отдельная программа",
-        hint="сборка unitree_mujoco/simulate на коммитах ADR-0023 (unitree_mujoco 1eb6642, "
-        "unitree_sdk2 9754cd1, MuJoCo 3.3.6), каталог сборки — на PATH; порядок сборки — шаг twin "
-        "scripts/phase4-stage1.sh",
+        hint="сборка на коммитах ADR-0023 (unitree_mujoco 1eb6642, unitree_sdk2 9754cd1, "
+        "MuJoCo 3.3.6): scripts/install.sh install unitree_g1 (часть twin), затем на PATH: "
+        "source scripts/activate.sh exec",
     ),
     needs(
         RequirementKind.VARIABLE,

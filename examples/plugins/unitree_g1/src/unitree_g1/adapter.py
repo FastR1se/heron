@@ -46,9 +46,9 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = (
         "cyclonedds",
         version="==0.10.2",
         because="на этой версии работают робот и двойник производителя",
-        hint="C-библиотека CycloneDDS 0.10.2 из исходника в свой префикс, затем обвязка против "
-        "неё: CYCLONEDDS_HOME=<префикс> pip install cyclonedds==0.10.2 "
-        "(колёс для Python 3.11+ нет)",
+        hint="окружение адаптера G1: scripts/install.sh install unitree_g1, затем "
+        "source scripts/activate.sh unitree_g1 (C-библиотека 0.10.2 из исходника и обвязка "
+        "против неё: колёс для Python 3.11+ нет)",
     ),
     forbids(
         RequirementKind.PYTHON,
@@ -56,14 +56,15 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = (
         version=">=0.11",
         because="участник CycloneDDS 0.11+ при обнаружении роняет процессы робота и двойника "
         "на 0.10.2",
-        hint="pip uninstall cyclonedds, затем обвязка 0.10.2 из исходника",
+        hint="процесс G1 — в окружении пакета: source scripts/activate.sh unitree_g1 "
+        "(scripts/install.sh install unitree_g1)",
     ),
     needs(
         RequirementKind.PYTHON,
         "unitree_sdk2py",
         because="IDL-типы unitree_hg и CRC команды",
-        hint="git clone https://github.com/unitreerobotics/unitree_sdk2_python; "
-        "pip install --no-deps -e <клон>",
+        hint="scripts/install.sh install unitree_g1 (часть venv: unitree_sdk2_python на "
+        "закреплённом коммите), затем source scripts/activate.sh unitree_g1",
     ),
 )
 """What the process driving a G1 has to find, and must not (ADR-0025).

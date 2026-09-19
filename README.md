@@ -85,8 +85,8 @@ uv pip install -e ".[dev]"
 генераторов и CLI окружение фазы 0 не требуется — оно нужно только чтобы
 запустить порождённую сцену.
 
-Разворот Linux-окружения с ROS 2, Gazebo, MuJoCo и Isaac Lab —
-[docs/phase0.md](docs/phase0.md).
+Установка Linux-машины — ROS 2, Gazebo, MuJoCo, Isaac Lab и окружения роботов одной командой
+`scripts/install.sh`: [docs/install.md](docs/install.md).
 
 ---
 
@@ -615,7 +615,7 @@ heron sim run examples/scenarios/table.yaml --into generated/table -R examples/r
 
 `--dry-run` печатает команды и не запускает ничего — это работает где угодно.
 Настоящий запуск требует Linux с ROS 2 Jazzy и Gazebo Harmonic, то есть
-[окружения фазы 0](docs/phase0.md).
+[окружения из docs/install.md](docs/install.md).
 
 Бэкенд симуляции — оркестратор процессов, а не ссылка на тела сцены: ядро
 ставится без вендорских зависимостей, поэтому оно говорит с симулятором
@@ -731,7 +731,8 @@ pytest tests/test_invariants.py
 | [docs/decisions/](docs/decisions/) | почему сделано так: контекст, решение, отвергнутые альтернативы |
 | [docs/journal/](docs/journal/) | ход работы, включая тупики и отрицательные результаты |
 | [docs/adding-a-robot.md](docs/adding-a-robot.md) | как добавить своего робота: от CAD до сцены |
-| [docs/phase0.md](docs/phase0.md) | разворот Linux-окружения: ROS 2, Gazebo, MuJoCo, Isaac Lab |
+| [docs/install.md](docs/install.md) | установка Linux-машины: ROS 2, Gazebo, MuJoCo, Isaac Lab, окружения роботов |
+| [scripts/README.md](scripts/README.md) | что лежит в scripts/: установщик, инструменты, прогоны на Linux |
 | [CHANGELOG.md](CHANGELOG.md) | что изменилось для пользователя по фазам |
 
 Имя `heron` — рабочее. Правила раздела 17 архитектуры держат переименование в

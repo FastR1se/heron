@@ -13,11 +13,11 @@ the description's own, and the least one the moving part can present is looked f
 contract's joints inside it over the profile's envelope -- on a grid when the subtree is small, by
 a seeded sample when it is not (then ``I_min`` is an upper bound of the least, and says so).
 
-``scripts/phase6-arm6-gains.py`` derives gains for a serial arm; this script checks the gains a
+``scripts/tools/arm-gains.py`` derives gains for a serial arm; this script checks the gains a
 profile already states, on any tree. It prints, per joint, the least and greatest inertia, ``b``
 and the damping ratio at both ends, and exits 1 if a joint is unstable at its lightest.
 
-Usage: python scripts/phase6-gains-check.py <profile.yaml> [--samples N] [--seed S]
+Usage: python scripts/tools/gains-check.py <profile.yaml> [--samples N] [--seed S]
 """
 
 from __future__ import annotations

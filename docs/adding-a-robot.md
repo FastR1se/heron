@@ -137,6 +137,13 @@ pip install -e examples/robots/my_robot[test]
 pytest examples/robots/my_robot/tests
 ```
 
+Если SDK производителя не ставится обычным `pip install` (архив, сборка из исходника, свой venv),
+положите рядом с `pyproject.toml` пакета `install.sh`: платформенный `scripts/install.sh` найдёт его
+и запустит, а окружение ляжет в `~/robot-stack/<пакет>`
+([ADR-0071](decisions/0071-one-installer-packages-install-themselves.md)). Образец — установщик пакета
+RC, [examples/plugins/robopro_rc/install.sh](../examples/plugins/robopro_rc/install.sh). Установщик
+ищется в `examples/plugins/*/`, поэтому такой пакет кладут туда.
+
 Скелет описания — стартовый **вход**, а не выход генератора: платформа его
 больше никогда не перезапишет. Замените его своим файлом (или подставьте путь к
 нему в `description.urdf`) и правьте профиль под него.
@@ -346,7 +353,7 @@ heron gen examples/robots/my_robot/profile.yaml --into generated/my_robot --back
 имени профиля: два экземпляра одного робота не пересекаются ни топиками, ни
 системами отсчёта.
 
-Запуск требует Linux с ROS 2 Jazzy и Gazebo Harmonic — [окружение фазы 0](phase0.md):
+Запуск требует Linux с ROS 2 Jazzy и Gazebo Harmonic — [установка](install.md):
 
 ```bash
 heron sim run examples/scenarios/table.yaml --into generated/table -R examples/robots --dry-run

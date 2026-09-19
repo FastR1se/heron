@@ -108,7 +108,7 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = tuple(
     needs(
         RequirementKind.ROS2,
         package,
-        hint=f"пакет ros-<дистрибутив>-{installed_by} (ставит scripts/phase0.sh)",
+        hint=f"пакет ros-<дистрибутив>-{installed_by} (ставит scripts/install.sh install ros2)",
     )
     for package, installed_by in TWIN_PACKAGES.items()
 )

@@ -19,6 +19,30 @@ uv pip install -e examples/plugins/unitree_g1
 связи нужны ещё CycloneDDS 0.10.2 и SDK производителя — в процессе без `rclpy` (ADR-0022). Что
 именно не хватает, называет `env check <сценарий>`.
 
+На Linux всё окружение пакета ставит его установщик [`install.sh`](install.sh), вызываемый
+платформой (ADR-0071). Всё ставится в `~/robot-stack/unitree_g1` (`STACK_ROOT` меняет корень):
+
+```bash
+scripts/install.sh install unitree_g1          # части dds venv ws twin по порядку
+scripts/install.sh install unitree_g1 ws       # или одна часть
+scripts/install.sh verify unitree_g1
+```
+
+| Часть | Что ставит |
+|---|---|
+| `dds` | C-библиотеку CycloneDDS 0.10.2 из исходника в свой префикс |
+| `venv` | окружение адаптера на python3.12: обвязка `cyclonedds==0.10.2` против этой библиотеки, `unitree_sdk2_python` на закреплённом коммите, платформа (`record`, `onnx`) и пакет; `rclpy` нет |
+| `ws` | рабочее пространство ROS 2: `unitree_hg` из `unitree_ros2` и мост `unitree_g1_bridge`; `rmw_cyclonedds_cpp` |
+| `twin` | `unitree_sdk2`, MuJoCo 3.3.6 и `unitree_mujoco` на коммитах ADR-0023; запускатель `bin/unitree_mujoco` с библиотеками сборки |
+
+Какое окружение какому процессу:
+
+```bash
+source scripts/activate.sh unitree_g1   # run / mission robot для G1 — без ROS 2 в оболочке
+source scripts/activate.sh ros          # sim run мира Gazebo с мостом
+source scripts/activate.sh exec         # sim run мира MuJoCo (двойник на PATH), из графической сессии
+```
+
 ## Конфигурация связи
 
 Единственное, что отличает двойник от железа, — `params` адаптера в профиле (ADR-0029):
@@ -62,14 +86,8 @@ adapters:
 `ros2_control` в менеджере, синхронно с физикой (ADR-0033). Адаптер тот же, что с MuJoCo и железом;
 в профиле `sim.gazebo` и `sim.mujoco` называют одну связь.
 
-Контроллер — ROS 2-пакет `ros2/unitree_g1_bridge`, собирается рядом с `unitree_hg`:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --base-paths examples/plugins/unitree_g1/ros2 <unitree_ros2>/cyclonedds_ws/src/unitree/unitree_hg \
-    --packages-select unitree_hg unitree_g1_bridge
-source install/setup.bash
-```
+Контроллер — ROS 2-пакет `ros2/unitree_g1_bridge`, собирается рядом с `unitree_hg` частью `ws`
+установщика; `source scripts/activate.sh ros` подключает рабочее пространство.
 
 Всё, что знает о роботе, контроллер получает параметрами от `unitree_g1.bridge`: суставы контракта, слот
 каждого, `mode_machine` тела, топики `/lowcmd` и `/lowstate`. Сцена работает в окружении связи
@@ -90,7 +108,7 @@ source install/setup.bash
 | `rmw_cyclonedds_cpp` | CycloneDDS 0.10, как у робота (ADR-0022) |
 | `controller_manager`, `gz_ros2_control`, `joint_state_broadcaster` | менеджер в Gazebo, спаунер, состояния для визуализации |
 
-Проверка на Linux — `scripts/phase4-stage5.sh`.
+Проверка сборки — `scripts/install.sh verify unitree_g1`; прогоны на Linux — `scripts/runs/`.
 
 ## Что адаптер решает сам
 

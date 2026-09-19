@@ -572,8 +572,8 @@ def test_the_builtin_twin_declares_exactly_the_packages_it_names(tmp_path: Path)
 
 
 @pytest.mark.parametrize("module", ["launch", "ros2_control"])
-def test_every_declared_package_is_installed_by_phase_zero(module: str) -> None:
-    """The other side of the same rule: the environment must provide them."""
+def test_every_declared_package_is_installed_by_the_installer(module: str) -> None:
+    """The other side of the same rule: the environment must provide them (ADR-0071)."""
     import importlib
 
     from conftest import REPO_ROOT
@@ -584,13 +584,13 @@ def test_every_declared_package_is_installed_by_phase_zero(module: str) -> None:
     }[module]
     packages = getattr(importlib.import_module(f"heron.generators.{module}"), declared)
 
-    script = REPO_ROOT / "scripts" / "phase0.sh"
+    script = REPO_ROOT / "scripts" / "install.sh"
     if not script.is_file():  # pragma: no cover - the script travels with the repo
-        pytest.skip("scripts/phase0.sh отсутствует")
+        pytest.skip("scripts/install.sh отсутствует")
     text = script.read_text(encoding="utf-8")
 
     missing = sorted({apt for apt in packages.values() if apt not in text})
-    assert not missing, f"фаза 0 не ставит: {missing}"
+    assert not missing, f"установщик не ставит: {missing}"
 
 
 # -- meshes in the copy ----------------------------------------------------

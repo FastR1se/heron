@@ -1,7 +1,7 @@
 """Phase 6, stage 0, fact 0.15: what Isaac Lab makes of a platform description.
 
-Run with Isaac Lab's launcher (``isaaclab.sh -p``) from ``scripts/phase6-probe.sh urdf``. The
-description is converted to USD, spawned as an articulation with a fixed base, and the facts the
+Run with Isaac Lab's launcher (``isaaclab.sh -p``), first by the probe of phase 6 and now from
+``scripts/runs/g1-upper-learned.sh mount``. The description is converted to USD, spawned as an articulation with a fixed base, and the facts the
 contract depends on are written to JSON: the DOF order PhysX assigns (fact 0.4 says nothing else
 decides it), the bodies left after merging fixed joints, and the limits and drive gains the
 converter took from the URDF. Nothing is set from the profile on purpose -- the question is what

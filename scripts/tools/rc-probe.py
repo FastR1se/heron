@@ -26,10 +26,10 @@ Steps, each optional:
                  Enter and records ``act_q`` / ``act_flange_x`` (ADR-0055). Compare with
                  ``python -m robopro_rc.kinematics <json> --urdf examples/robots/rc5/rc5.urdf``.
 
-    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --json probe.json
-    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --full
-    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --watch 60
-    python scripts/phase5-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --pairs 5 \\
+    python scripts/tools/rc-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --json probe.json
+    python scripts/tools/rc-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --full
+    python scripts/tools/rc-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --watch 60
+    python scripts/tools/rc-probe.py --host 192.168.10.10 --api-dir ~/robopro_api --pairs 5 \\
         --json pairs.json
 """
 
@@ -49,7 +49,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-log_sdk = logging.getLogger("phase5-probe.sdk")
+log_sdk = logging.getLogger("rc-probe.sdk")
 
 
 def log(message: str) -> None:

@@ -4,15 +4,16 @@
 # from its profile and scenario (docs/plans/phase6-learned-skill.md, "Этап 4"; ADR-0044,
 # ADR-0046).
 #
-# Built like scripts/phase4-stage5.sh and on the same rule: every claim stands on a
-# confirmation taken by something other than the thing under test. The derived environment is
+# Built on the rule of phase 4: every claim stands on a confirmation taken by something other
+# than the thing under test. The derived environment is
 # read off spec.json, not off the dry run that printed it; the artifact is checked by
 # `policy check` against the profile, not by the exporter that wrote it; the threshold of
 # ADR-0005 is measured off nvidia-smi and /proc, not off what training reports about itself.
 # Nothing stops at the first failure.
 #
-#   env     versions and machine into conditions.md; the platform installed into the training
-#           venv; the task package installed there; rclpy must NOT import (invariant 2)
+#   env     versions and machine into conditions.md; the platform and the task package
+#           refreshed in the training venv (scripts/install.sh sync train); rclpy must NOT
+#           import (invariant 2)
 #   plan    validate; train env; train run --dry-run -- the derivation, and the refusals a
 #           broken contract earns, before a second of GPU time
 #   train   train run at ENVS for ITER iterations, with peak VRAM, RAM and swap sampled from
@@ -23,36 +24,28 @@
 #           the policy's own tracking in Isaac: the numbers stage 6 compares Gazebo with
 #
 # Usage:
-#   bash scripts/phase6-stage4.sh                      # all steps, in order
-#   bash scripts/phase6-stage4.sh env plan             # selected steps
-#   ENVS=1024 ITER=1500 bash scripts/phase6-stage4.sh train check
+#   bash scripts/runs/arm6-train.sh                      # all steps, in order
+#   bash scripts/runs/arm6-train.sh env plan             # selected steps
+#   ENVS=1024 ITER=1500 bash scripts/runs/arm6-train.sh train check
 #
-# Prerequisites: scripts/phase0.sh install isaac (TRAIN_ROOT, default ~/train-stack) and exec;
-# scripts/phase6-probe.sh passed (ADR-0005 threshold by surrogate, experiment 0002).
+# Prerequisites: scripts/install.sh install exec train --accept-nvidia-eula (ADR-0071); the
+# threshold of ADR-0005 passed by surrogate (experiment 0002).
 #
-# Writes outside $STAGE_ROOT: the platform and the task package installed into the training
-# venv; runs under the platform's data home (the <PREFIX>_HOME variable, pointed at
-# $STAGE_ROOT below); the Kit cache in $HOME.
+# Writes outside $STAGE_ROOT: the platform and the packages refreshed in the training venv;
+# runs under the platform's data home (the <PREFIX>_HOME variable, pointed at $STAGE_ROOT
+# below); the Kit cache in $HOME.
 
 set -uo pipefail
 
-readonly APP="heron"                       # the command name; section 17 rename touches this line
-ENV_PREFIX="${APP^^}"                      # variables the platform reads, built from the name
-readonly ENV_PREFIX
+# shellcheck source=../lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly REPO_ROOT
-readonly EXEC_VENV="$REPO_ROOT/.venv"
-readonly EXEC_PY="$EXEC_VENV/bin/python"
-readonly EXEC_CLI="$EXEC_VENV/bin/$APP"
 readonly SCENARIO="$REPO_ROOT/examples/scenarios/arm6_train.yaml"
 readonly PROFILE="$REPO_ROOT/examples/robots/arm6.yaml"
 readonly REGISTRY="$REPO_ROOT/examples/robots"
-readonly TASK_PACKAGE="$REPO_ROOT/examples/plugins/arm6_reach"
 readonly TASK="arm6_reach"
-readonly ONNX_PROBE="$REPO_ROOT/scripts/phase6-probe-onnx.py"
+readonly ONNX_PROBE="$REPO_ROOT/scripts/tools/onnx-compare.py"
 
-TRAIN_ROOT="${TRAIN_ROOT:-$HOME/train-stack}"
 STAGE_ROOT="${STAGE_ROOT:-$HOME/phase6-stage4}"
 ENVS="${ENVS:-512}"
 ITER="${ITER:-1000}"
@@ -61,10 +54,7 @@ DEVICE="${DEVICE:-cuda:0}"
 TRAIN_TIMEOUT="${TRAIN_TIMEOUT:-21600}"   # ADR-0005 allows six hours; this is the wall of the run
 HEARTBEAT="${HEARTBEAT:-60}"
 SAMPLE="${SAMPLE:-5}"                     # seconds between memory samples
-readonly TRAIN_ROOT STAGE_ROOT ENVS ITER SEED DEVICE TRAIN_TIMEOUT HEARTBEAT SAMPLE
-readonly TRAIN_VENV="$TRAIN_ROOT/venv"
-readonly TRAIN_PY="$TRAIN_VENV/bin/python"
-readonly TRAIN_CLI="$TRAIN_VENV/bin/$APP"
+readonly STAGE_ROOT ENVS ITER SEED DEVICE TRAIN_TIMEOUT HEARTBEAT SAMPLE
 readonly RUN_HOME="$STAGE_ROOT/data"      # <PREFIX>_HOME: runs and the USD cache live here
 readonly STORE="$STAGE_ROOT/store"
 readonly ALL_STEPS="env plan train check replay"
@@ -170,7 +160,7 @@ version_of() {  # version_of <python> <distribution>
 
 need_train_stack() {
     [[ -x $TRAIN_PY ]] && return 0
-    record "стек обучения" отказ "нет $TRAIN_PY (scripts/phase0.sh install isaac)"
+    record "стек обучения" отказ "нет $TRAIN_PY (scripts/install.sh install train --accept-nvidia-eula)"
     return 1
 }
 
@@ -191,8 +181,7 @@ step_env() {
 
     # The platform in the training venv: the same code computes contract_id on both sides
     # of the boundary, which is the whole reason it is installed here (ADR-0044, item 3).
-    if clean "$TRAIN_PY -m pip install --no-deps -e $REPO_ROOT -e $TASK_PACKAGE" \
-            > "$STAGE_ROOT/install.log" 2>&1; then
+    if clean "bash '$REPO_ROOT/scripts/install.sh' sync train" > "$STAGE_ROOT/install.log" 2>&1; then
         record "платформа и задача в окружении обучения" ok "$(version_of "$TRAIN_PY" "$APP")"
     else
         record "платформа и задача в окружении обучения" отказ "см. $STAGE_ROOT/install.log"

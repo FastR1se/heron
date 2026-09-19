@@ -4,7 +4,8 @@
 поставить, что где лежит, как ею пользоваться и где что менять.
 
 Руководство описывает код на 16.09.2026: версия пакета `0.4.0` (фаза 4 закрыта) плюс сделанное
-в фазах 5 и 6 и ещё не закрытое. Где возможность не проверена на настоящем симуляторе или
+в фазах 5 и 6 и ещё не закрытое; установка — на 19.09.2026 (`scripts/install.sh`, версия
+`0.5.0.dev0`). Где возможность не проверена на настоящем симуляторе или
 роботе, это сказано прямо. Весь вывод команд ниже — настоящий, снят с примеров репозитория.
 
 Имя `heron` рабочее. В командах и переменных окружения оно написано так, как есть сейчас.
@@ -140,14 +141,16 @@
 │   │   └── contracts.lock.json
 │   ├── scenarios/           сцены: bench, rest_bench, table, humanoid, humanoid_mujoco, complex, arm6_train
 │   └── plugins/             пакеты «как от производителя», ставятся отдельно
-│       ├── unitree_g1/      адаптер DDS и двойники G1 (MuJoCo, Gazebo)
-│       └── arm6_reach/      задача обучения для arm6
+│       ├── unitree_g1/      адаптер DDS и двойники G1 (MuJoCo, Gazebo); install.sh — его окружение
+│       ├── robopro_rc/      адаптер манипуляторов RC «Робопро»; install.sh — venv стенда с API
+│       ├── arm6_reach/      задача обучения для arm6
+│       └── g1_upper_reach/  задача обучения для закреплённого G1
 ├── tests/                   тесты платформы
-├── scripts/                 phase0.sh — окружение Linux; phaseN-*.sh — прогоны фаз на Linux
+├── scripts/                 install.sh — установка Linux; activate.sh — окружения; tools/, runs/
 ├── docs/
 │   ├── user-guide.md        это руководство
 │   ├── adding-a-robot.md    подробно: свой робот от CAD до сцены
-│   ├── phase0.md            окружение Linux: ROS 2, Gazebo, MuJoCo, Isaac Lab
+│   ├── install.md           установка Linux: ROS 2, Gazebo, MuJoCo, Isaac Lab, роботы
 │   ├── decisions/           архитектурные решения (ADR-NNNN): почему сделано так
 │   ├── journal/             журналы сессий разработки
 │   ├── experiments/         измерительные прогоны с числами
@@ -177,6 +180,14 @@ uv venv --python 3.11
 uv pip install -e ".[dev]"
 ```
 
+На Windows всё окружение разработки — ядро с группами для тестов и все пакеты `examples/plugins` —
+ставит один скрипт, тем же набором, что CI; кэши кладёт на диск репозитория:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\dev-setup.ps1
+powershell -ExecutionPolicy Bypass -File scripts\dev-setup.ps1 -Descriptions   # и описания производителей
+```
+
 Команда `heron` появляется в `.venv` (`.venv/bin/heron` на Linux, `.venv\Scripts\heron.exe` на
 Windows). Активируйте окружение или вызывайте `uv run heron …`.
 
@@ -199,7 +210,7 @@ export PYTHONUTF8=1            # Git Bash
 
 | Группа | Что ставит | Когда нужна |
 |---|---|---|
-| `sim` | `mujoco` | окружение фазы 0 на Linux |
+| `sim` | `mujoco` | окружение исполнения на Linux |
 | `onnx` | `onnxruntime` | исполнить обученную политику |
 | `record` | `mcap` | `run --record` |
 | `testing` | `pytest` | прогнать контрактный набор из тестов пакета робота |
@@ -212,43 +223,76 @@ export PYTHONUTF8=1            # Git Bash
 Python, поэтому их надо поставить.
 
 ```bash
-# гуманоид G1: адаптер и двойники
-uv pip install -e examples/plugins/unitree_g1
+uv pip install -e examples/plugins/unitree_g1 -e examples/plugins/robopro_rc \
+               -e examples/plugins/arm6_reach -e examples/plugins/g1_upper_reach
 python examples/robots/g1_23dof/fetch_description.py   # описания производителя по закреплённым коммитам
-
-# задача обучения arm6_reach
-uv pip install --no-deps -e examples/plugins/arm6_reach
 ```
 
-`--no-deps` у `arm6_reach` обязателен сейчас: пакет объявляет `heron>=0.5`, а ядро пока `0.4.0`, и
-без флага зависимости не разрешаются. Так же пакет ставят скрипты фазы 6.
+Пакеты ставятся обычной командой, без `--no-deps`: между выпусками ядро несёт следующую версию как
+разрабатываемую (`0.5.0.dev0`), и пакеты задач требуют `heron>=0.5.0.dev0`
+([ADR-0071](decisions/0071-one-installer-packages-install-themselves.md)). На Linux и в
+`dev-setup.ps1` их ставит скрипт.
+
+**Не выполняйте `uv sync` в `.venv`.** Он удаляет всё, чего нет в `pyproject.toml`, — пакеты роботов
+вместе с этим, и платформа перестаёт их видеть. Вернуть — `scripts/install.sh sync` на Linux или
+`dev-setup.ps1` на Windows.
 
 Без `fetch_description.py` профиль G1 не проходит проверку (`urdf.file_not_found`): описание
 производителя в репозиторий не кладётся, хранятся только источник и коммит.
 
 ### 4.3. Полный стек: Linux
 
-Симуляторы и обучение работают только на **Ubuntu 24.04, x86_64, GPU NVIDIA**. Всё окружение
-ставит один скрипт, подробности — [docs/phase0.md](phase0.md):
+Симуляторы и обучение работают только на **Ubuntu 24.04, x86_64**; обучение — ещё и с GPU NVIDIA.
+Всё окружение ставит один скрипт `scripts/install.sh`, подробности — [docs/install.md](install.md),
+что лежит в `scripts/` — [scripts/README.md](../scripts/README.md):
 
 ```bash
-./scripts/phase0.sh check                          # промер, ничего не меняет
-./scripts/phase0.sh install                        # base ros2 gazebo exec isaac docker
-./scripts/phase0.sh install isaac --accept-nvidia-eula
-./scripts/phase0.sh verify                         # каждая среда запускается по-настоящему
+scripts/install.sh install                             # base ros2 gazebo exec descriptions и пакеты роботов
+scripts/install.sh install train --accept-nvidia-eula  # Isaac Sim, Isaac Lab, rsl_rl — десятки ГиБ
+scripts/install.sh verify                              # каждая среда запускается по-настоящему
+scripts/install.sh status                              # что где стоит
+scripts/install.sh sync                                # после git pull: пакеты заново, без сборок
+```
+
+Компоненты ставятся и по одному: `scripts/install.sh install ros2 gazebo`; `check` — предусловия без
+изменений, `--dry-run` — только напечатать команды.
+
+| Компонент | Что ставит |
+|---|---|
+| `base` | пакеты сборки, `vulkan-tools`, `ffmpeg`, `uv` |
+| `ros2` | ROS 2 Jazzy desktop, `ros2_control`, контроллеры, `xacro`, MCAP-хранилище rosbag2 |
+| `gazebo` | Gazebo Harmonic, мосты `ros_gz` и `gz_ros2_control` |
+| `exec` | `.venv` репозитория: ядро с группами `sim dev ros2 record onnx` и все пакеты `examples/plugins` |
+| `descriptions` | описания производителей для примеров (`examples/robots/*/fetch_description.py`) |
+| `train` | `~/train-stack`: Isaac Sim, Isaac Lab, rsl_rl, ядро и пакеты задач |
+| `docker` | Docker CE, compose, NVIDIA Container Toolkit |
+| `unitree_g1` | `~/robot-stack/unitree_g1`: CycloneDDS 0.10.2, venv адаптера с SDK, мост Gazebo, двойник MuJoCo |
+| `robopro_rc` | `~/robot-stack/robopro_rc`: venv стенда с API производителя (`API_DIR=<архив>`) |
+
+Две последние строки — установщики самих пакетов (`examples/plugins/<пакет>/install.sh`): окружение
+робота объявляет и строит пакет, платформа только находит и запускает установщик. Свой пакет получает
+установку так же — [раздел 23](#23-подключить-api-своего-робота-и-выйти-на-железо).
+
+**Окружение — под процесс.** Каждый терминал начинается с одной строки:
+
+```bash
+source scripts/activate.sh exec         # validate, gen, mission run, мир MuJoCo
+source scripts/activate.sh ros          # ROS 2 и мосты пакетов: мир Gazebo, робот на ros2_control
+source scripts/activate.sh train        # обучение
+source scripts/activate.sh unitree_g1   # процесс G1: run, mission robot
+source scripts/activate.sh robopro_rc   # процесс RC5 на стенде
 ```
 
 Что важно знать:
 
-- **Окружений Python два.** Исполнение — `.venv` репозитория (ядро, MuJoCo, ROS 2); обучение —
-  `~/train-stack/venv` (Isaac Sim, Isaac Lab, rsl_rl). Это не удобство, а правило: ROS 2 не должен
-  попасть в обучение.
-- **`.venv` на Linux создаёт скрипт, а не вы.** `rclpy` скомпилирован под Python дистрибутива ROS 2
-  (3.12 в Ubuntu 24.04), и venv исполнения обязан быть на той же версии. Venv на 3.11, созданный
-  по разделу 4.1, `rclpy` не импортирует; скрипт такой venv не примет и скажет, как пересоздать.
-- **Перед `sim run`, `run` и `env check` для сцен Gazebo** подключите ROS 2:
-  `source /opt/ros/jazzy/setup.bash`.
-- Драйвер NVIDIA, подкачку и лицензию NVIDIA ставит человек, не скрипт.
+- **Окружений Python несколько, и так задумано.** Исполнение — `.venv` на Python дистрибутива ROS 2
+  (3.12 в Ubuntu 24.04: `rclpy` — скомпилированное расширение; venv на 3.11 по разделу 4.1 его не
+  импортирует, и скрипт такой venv не примет). Обучение — `~/train-stack/venv`: ROS 2 в обучение не
+  попадает. Процесс G1 — свой venv с CycloneDDS 0.10.2 и без ROS 2.
+- **`activate.sh train` и `activate.sh <пакет>` отказывают в оболочке с ROS 2**: выгрузить его нельзя.
+  Если ROS 2 подключается в `~/.bashrc`, уберите это оттуда.
+- Драйвер NVIDIA, подкачку (для `train`), лицензию NVIDIA и архив API производителя даёт человек,
+  не скрипт.
 
 ### 4.4. Проверка установки
 
@@ -256,11 +300,13 @@ uv pip install --no-deps -e examples/plugins/arm6_reach
 heron version
 heron capabilities
 pytest                                        # тесты платформы
-pytest examples/plugins/unitree_g1/tests      # тесты пакета G1, если он поставлен
+pytest examples/plugins/*/tests               # тесты пакетов примеров
 ```
 
+На Linux то же делает `scripts/install.sh verify` — и запускает сами среды.
+
 ```
-Heron 0.4.0
+Heron 0.5.0.dev0
 данные:  /home/user/.local/share/heron  (переменная HERON_HOME)
 реестр:  /home/user/.local/share/heron/registry  (переменная HERON_REGISTRY)
 ```
@@ -1125,13 +1171,12 @@ heron env check <сценарий> -R <реестр>                 # хват�
 
 ## 18. Запустить манипулятор в Gazebo
 
-Нужен Linux с окружением фазы 0 ([4.3](#43-полный-стек-linux)).
+Нужен Linux с установленным окружением ([4.3](#43-полный-стек-linux)).
 
 **Терминал 1 — мир:**
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source .venv/bin/activate
+source scripts/activate.sh ros
 heron env check examples/scenarios/table.yaml -R examples/robots
 heron sim run   examples/scenarios/table.yaml --into generated/table -R examples/robots
 ```
@@ -1142,8 +1187,7 @@ heron sim run   examples/scenarios/table.yaml --into generated/table -R examples
 **Терминал 2 — робот:**
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source .venv/bin/activate
+source scripts/activate.sh ros
 heron run examples/scenarios/table.yaml -R examples/robots --record table.mcap
 ```
 
@@ -1161,35 +1205,41 @@ heron run examples/scenarios/table.yaml -R examples/robots -g "target=[0.5,-0.3,
 ## 19. Запустить G1 в MuJoCo и в Gazebo
 
 G1 — робот со своим протоколом (DDS производителя). Он входит пакетом `unitree_g1`, и у него свои
-требования к окружению. Полное описание — [examples/plugins/unitree_g1/README.md](../examples/plugins/unitree_g1/README.md),
-проверенная последовательность — скрипты `scripts/phase4-stage4.sh` (MuJoCo) и
-`scripts/phase4-stage5.sh` (Gazebo).
+требования к окружению. Полное описание — [examples/plugins/unitree_g1/README.md](../examples/plugins/unitree_g1/README.md).
 
-**Настоящий G1, а не симулятор** — отдельная пошаговая инструкция со сборкой CycloneDDS 0.10.2,
-отдельным venv, правкой профиля и запуском: [docs/g1-on-hardware.md](g1-on-hardware.md).
+**Настоящий G1, а не симулятор** — отдельная пошаговая инструкция: профиль под ваш экземпляр,
+связь, безопасность и запуск — [docs/g1-on-hardware.md](g1-on-hardware.md).
 
-Коротко о том, что нужно:
+Всё окружение G1 ставит установщик пакета:
 
-| Что | Зачем |
+```bash
+scripts/install.sh install unitree_g1 descriptions
+scripts/install.sh verify unitree_g1
+```
+
+| Что ставит (`~/robot-stack/unitree_g1`) | Зачем |
 |---|---|
-| `uv pip install -e examples/plugins/unitree_g1` в venv исполнения | адаптер и двойники находятся платформой |
-| `python examples/robots/g1_23dof/fetch_description.py` | URDF и MJCF производителя |
-| **отдельный venv адаптера**: платформа и пакет G1 (`pip install --no-deps -e`), CycloneDDS **0.10.2** из исходника и `unitree_sdk2py`; ROS 2 в нём не подключается | процесс DDS-адаптера не загружает `rclpy`; CycloneDDS 0.11+ рядом с роботом на 0.10.2 запрещён |
-| для MuJoCo: `unitree_mujoco` на `PATH`, графическая сессия (`DISPLAY`) | двойник производителя, без безголового режима |
-| для Gazebo: собранные `colcon` пакеты `unitree_hg` и `unitree_g1_bridge`, `rmw_cyclonedds_cpp` | мост в менеджере контроллеров |
+| CycloneDDS **0.10.2** из исходника и venv адаптера: обвязка против неё, `unitree_sdk2py`, платформа и пакет G1, без ROS 2 | процесс DDS-адаптера не загружает `rclpy`; CycloneDDS 0.11+ рядом с роботом на 0.10.2 запрещён |
+| двойник `unitree_mujoco` на коммитах ADR-0023 и запускатель на `PATH` | мир MuJoCo; окно обязательно (`DISPLAY`), безголового режима нет |
+| рабочее пространство с `unitree_hg` и `unitree_g1_bridge`, `rmw_cyclonedds_cpp` | мост в менеджере контроллеров Gazebo |
+
+Пакет G1 в `.venv` ставит компонент `exec`, описания производителя — `descriptions`.
 
 Порядок — тот же, что у манипулятора:
 
 ```bash
-# терминал 1: мир (venv исполнения)
+# терминал 1: мир (графическая сессия)
+source scripts/activate.sh exec
 heron env check examples/scenarios/humanoid_mujoco.yaml -R examples/robots
 heron sim run   examples/scenarios/humanoid_mujoco.yaml --into generated/hm -R examples/robots
 
-# терминал 2: робот (venv адаптера, ROS 2 не подключён)
+# терминал 2: робот (окружение пакета, ROS 2 не подключён)
+source scripts/activate.sh unitree_g1
 heron run examples/scenarios/humanoid_mujoco.yaml -R examples/robots --record g1.mcap
 ```
 
-Для Gazebo — сцена `humanoid.yaml`; `run` сам применит окружение мира (`RMW_IMPLEMENTATION`,
+Для Gazebo — сцена `humanoid.yaml`, мир — из `source scripts/activate.sh ros`; `run` сам применит
+окружение мира (`RMW_IMPLEMENTATION`,
 `ROS_DOMAIN_ID`, `CYCLONEDDS_URI`), и сухой прогон его покажет.
 
 **Робот падает сразу после запуска мира.** Это не дефект: база свободна, встроенный контроллер
@@ -1336,6 +1386,14 @@ pytest my_robots/my_arm/tests          # красный: каждая неуда
 Канал к роботу внедряйте в конструктор: тогда решения адаптера проверяются на записывающем канале,
 без SDK и без робота. Живой пример — [unitree_g1/adapter.py](../examples/plugins/unitree_g1/src/unitree_g1/adapter.py)
 и `channel.py`.
+
+**Установка SDK.** Если SDK не ставится обычным `pip install` — архив, сборка из исходника, свой venv
+без ROS 2, — положите пакет в `examples/plugins/<пакет>/` и рядом с его `pyproject.toml` —
+`install.sh`. `scripts/install.sh install <пакет>` найдёт его и запустит; окружение ляжет в
+`~/robot-stack/<пакет>`, а `source scripts/activate.sh <пакет>` войдёт в его venv
+([ADR-0071](decisions/0071-one-installer-packages-install-themselves.md)). Установщик отвечает на
+команды `install`, `sync`, `verify`, `status`; код 3 — «пропущено: нет входа, который даёт человек».
+Образец на 90 строк — [robopro_rc/install.sh](../examples/plugins/robopro_rc/install.sh).
 
 **3. Тесты** — обвязка `testing.py` и общий набор, который пакет прогоняет у себя:
 
@@ -1526,7 +1584,7 @@ Isaac на Linux ([4.3](#43-полный-стек-linux)); все шаги до 
 
 ```bash
 heron task new my_reach --into my_tasks
-uv pip install --no-deps -e my_tasks/my_reach
+uv pip install -e my_tasks/my_reach
 heron task list
 ```
 
@@ -1580,10 +1638,12 @@ heron train run examples/scenarios/arm6_train.yaml -R examples/robots --dry-run
 ...
 ```
 
-**5. Обучение** — в venv обучения (`~/train-stack/venv`), куда платформа и пакет задачи поставлены
-`pip install --no-deps -e`, **без** подключённого ROS 2:
+**5. Обучение** — в venv обучения (`~/train-stack/venv`), **без** подключённого ROS 2. Платформу и
+пакеты `examples/plugins` туда ставит `scripts/install.sh install train`; свой пакет задачи —
+`uv pip install --python ~/train-stack/venv/bin/python -e my_tasks/my_reach`:
 
 ```bash
+source scripts/activate.sh train
 heron train env examples/scenarios/arm6_train.yaml
 heron train run examples/scenarios/arm6_train.yaml -R examples/robots --envs 512 --iterations 1000 --seed 1
 ```
@@ -1610,8 +1670,8 @@ skills: [hold, {move_joints: arm6_reach@<id>}]
 `target`. Нужна группа `onnx`. Расхождение контракта, сети или артефакта — отказ с кодами
 `policy.*` до подключения.
 
-Проверенная последовательность на Linux — `scripts/phase6-stage4.sh` (обучение) и
-`scripts/phase6-stage5.sh` (исполнение в Gazebo и внесённые расхождения).
+Проверенная последовательность на Linux — `scripts/runs/arm6-train.sh` (обучение) и
+`scripts/runs/arm6-learned-gazebo.sh` (исполнение в Gazebo и внесённые расхождения).
 
 ## 27. Добавить двойника или бэкенд симуляции
 
@@ -1649,22 +1709,25 @@ my_robot_gazebo = "my_robot.bridge:MyRobotGazeboTwin"
 ## 28. Разработка самой платформы
 
 ```bash
-uv pip install -e ".[dev]" -e examples/plugins/unitree_g1
-uv pip install --no-deps -e examples/plugins/arm6_reach
+powershell -ExecutionPolicy Bypass -File scripts\dev-setup.ps1 -Descriptions   # Windows
+# или вручную, как в CI:
+uv pip install -e ".[dev]" -e examples/plugins/unitree_g1 -e examples/plugins/robopro_rc \
+               -e examples/plugins/arm6_reach -e examples/plugins/g1_upper_reach
 python examples/robots/g1_23dof/fetch_description.py    # иначе часть тестов пропускается
 
 pytest                                          # тесты платформы
-pytest examples/plugins/unitree_g1/tests examples/plugins/arm6_reach/tests
+pytest examples/plugins/*/tests                 # тесты пакетов примеров
 ruff check src tests examples/plugins
 mypy                                            # строгий режим, ядро
 mypy examples/plugins/unitree_g1/src
+mypy examples/plugins/robopro_rc/src
 ```
 
 **CI** ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) — четыре задачи:
 
 | Задача | Что доказывает |
 |---|---|
-| `checks` | тесты, типы, линтер ядра и пакета G1 |
+| `checks` | тесты, типы, линтер ядра и пакетов примеров; разбор скриптов установки |
 | `core-without-robots` | инвариант 1: удаляется `examples/`, ядро ставится и проходит тесты |
 | `core-without-vendors` | ядро без единой группы: CLI, `validate`, `gen --check`, сухие прогоны, `dummy`, отказы окружения |
 | `user-robot-stub` | заготовка робота ставится пакетом, проходит `validate`, а набор падает только на TODO |
@@ -1679,9 +1742,11 @@ mypy examples/plugins/unitree_g1/src
 - Коды находок — публичный API: тесты проверяют код, не текст.
 - Новое структурное решение — карточка в `docs/decisions/`, а не абзац в архитектуре.
 
-**Прогоны на Linux.** Скрипты `scripts/phase4-stage*.sh` и `scripts/phase6-stage*.sh` — проверенные
-последовательности фаз: окружение, требования, запуск мира и робота, числа. Каждый печатает справку
-в шапке и запускается по шагам: `bash scripts/phase6-stage5.sh env coded`.
+**Прогоны на Linux.** Скрипты `scripts/runs/*.sh` — приёмочные прогоны незакрытых этапов:
+окружение, требования, запуск мира и робота, числа. Каждый печатает справку в шапке и запускается по
+шагам: `bash scripts/runs/arm6-learned-gazebo.sh env coded`. Инструменты — `scripts/tools/`; что
+за что отвечает — [scripts/README.md](../scripts/README.md). Прогон закрытой фазы удаляется: он остаётся
+в истории git.
 
 ## 29. Где что менять: карта
 
@@ -1760,19 +1825,24 @@ mypy examples/plugins/unitree_g1/src
 **`urdf.file_not_found` у G1.** Не загружены описания: `python examples/robots/g1_23dof/fetch_description.py`.
 Путь `description.urdf` читается от файла профиля, а не от рабочего каталога.
 
-**`env.missing … rclpy` / `пакет ROS 2 … — окружение ROS 2 не подключено`.** `source /opt/ros/jazzy/setup.bash`.
+**`env.missing … rclpy` / `пакет ROS 2 … — окружение ROS 2 не подключено`.** `source scripts/activate.sh ros`.
 Если после этого `rclpy` всё равно не импортируется — venv создан не на Python дистрибутива ROS 2
-(пересоздайте через `scripts/phase0.sh install exec`).
+(пересоздайте: `rm -rf .venv && scripts/install.sh install exec`).
 
-**`env.forbidden` для CycloneDDS.** На машине CycloneDDS 0.11+ рядом с роботом или двойником на
-0.10.2 — отдельный venv адаптера ([раздел 19](#19-запустить-g1-в-mujoco-и-в-gazebo)).
+**`env.forbidden` для CycloneDDS.** Процесс G1 запущен не в окружении пакета: `source scripts/activate.sh
+unitree_g1` ([раздел 19](#19-запустить-g1-в-mujoco-и-в-gazebo)).
+
+**`env.missing` для пакета робота, `адаптер … не установлен` после `git pull` или `uv sync`.**
+Пакеты роботов выпали из venv или их точки входа устарели: `scripts/install.sh sync` (Linux),
+`scripts\dev-setup.ps1` (Windows).
 
 **`run`: `окружение процесса расходится с окружением мира`.** В оболочке уже задан
 `ROS_DOMAIN_ID`/`RMW_IMPLEMENTATION`/`CYCLONEDDS_URI` с другим значением. Уберите переменную или
 поднимите мир в том же окружении.
 
-**`uv pip install -e examples/plugins/arm6_reach` не разрешает зависимости (`heron>=0.5`).**
-Ставьте с `--no-deps` ([4.2](#42-пакеты-примеров)).
+**`uv pip install -e examples/plugins/arm6_reach` не разрешает зависимости (`heron>=0.5.0.dev0`).**
+В venv стоит старая платформа: поставьте её из этого клона в той же команде — `uv pip install -e .
+-e examples/plugins/arm6_reach` ([4.2](#42-пакеты-примеров)).
 
 **`policy.not_in_store` / `политика … не найдена в хранилище`.** Укажите хранилище: `HERON_STORE`
 для `run`, `validate`, `skill check`; `--store` для `policy` и `train`.
@@ -1906,8 +1976,9 @@ mypy examples/plugins/unitree_g1/src
 |---|---|
 | [README.md](../README.md) | обзор платформы |
 | [docs/adding-a-robot.md](adding-a-robot.md) | добавляете робота: описание, профиль, частые отказы, пакет производителя |
-| [docs/g1-on-hardware.md](g1-on-hardware.md) | выводите команды на настоящего Unitree G1: зависимости по шагам, профиль, запуск, ошибки |
-| [docs/phase0.md](phase0.md) | разворачиваете Linux-окружение |
+| [docs/g1-on-hardware.md](g1-on-hardware.md) | выводите команды на настоящего Unitree G1: окружение, профиль, запуск, ошибки |
+| [docs/install.md](install.md) | ставите Linux-машину: `scripts/install.sh`, компоненты, окружения |
+| [scripts/README.md](../scripts/README.md) | ищете, какой скрипт за что отвечает |
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | нужен источник правды: инварианты, абстракции, дорожная карта |
 | [docs/decisions/](decisions/) | хотите понять, **почему** сделано так: контекст, альтернативы, последствия. Номера ADR в сообщениях валидатора ведут сюда |
 | [examples/plugins/unitree_g1/README.md](../examples/plugins/unitree_g1/README.md) | работаете с G1 или пишете свой пакет робота |

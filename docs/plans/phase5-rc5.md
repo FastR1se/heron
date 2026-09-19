@@ -131,7 +131,7 @@ Inovance — отдельная часть после фазы: его внеш�
 | 0.48 | Совпадает ли `act_vel_scale` пакета с velocity-шкалой `scale_setup` (и чему равен в покое) | проба `--full`: `scale_setup.get` и `act_vel_scale` рядом; этап 4, `move` |
 | 0.49 | Принимает ли контроллер `hold` при `safeguard_stop` и `emergency_stop` | этап 4; до ответа — срок SDK 5 с (ADR-0061) |
 
-Скрипт — `scripts/phase5-probe.py`: без единой команды движения; режим `full` — отдельным флагом.
+Скрипт — `scripts/tools/rc-probe.py` (был `scripts/phase5-probe.py`): без единой команды движения; режим `full` — отдельным флагом.
 С этапа 3 — по исходнику 1.4.1 и через пакет RC: серия меток (`--stamps`), наблюдение кнопки
 (`--watch`), пары для описания (`--pairs`).
 
@@ -295,7 +295,7 @@ Inovance — отдельная часть после фазы: его внеш�
 | описание `rc5.urdf` по DH API, соглашение — предположение; прямая кинематика и сравнение с `act_flange_x` | `examples/robots/rc5/rc5.urdf`, `kinematics.py` (ADR-0055) | описание = классическая DH до 1e-9; модифицированная отличается на > 5 см |
 | профиль `rc5`, сценарий `rc5_bench` (мир `dummy`), lock | `examples/robots/rc5`, `examples/scenarios` (ADR-0051) | `validate` чисто; `run` на `dummy` — «выполнено»; сухой `real` только со шкалой |
 | критерий 3 | `skill check move_joints rc5` → `skill.control_mode_incompatible` | тест пакета и шаг CI |
-| проба и стенд | `scripts/phase5-probe.py` (переписана по исходнику), `scripts/phase5-stage4.sh` | только синтаксис: робота нет |
+| проба и стенд | `scripts/tools/rc-probe.py` (переписана по исходнику), `scripts/runs/rc5-stand.sh` | только синтаксис: робота нет |
 
 Найдено по ходу, не закрыто этапом:
 

@@ -4,13 +4,13 @@
 # "Этап 4"; ADR-0049..0057, ADR-0061, ADR-0062). Every step is its own call, and a human
 # stands at the emergency button through all of them.
 #
-# Built on the rule of scripts/phase4-stage5.sh: a confirmation is taken by something
-# other than the thing under test. Whether the robot moved is read by a separate
-# read-only RTD connection before and after each run (pose.py below), not from what the
-# skill or the adapter say about themselves; runs are recorded (ADR-0038).
+# Built on the rule of phase 4: a confirmation is taken by something other than the thing
+# under test. Whether the robot moved is read by a separate read-only RTD connection before
+# and after each run (pose.py below), not from what the skill or the adapter say about
+# themselves; runs are recorded (ADR-0038).
 #
-#   env     a venv with the platform, the robot package and the vendor's API 1.4.1;
-#           env check names what is missing
+#   env     the package's venv (scripts/install.sh install robopro_rc: the platform, the
+#           package, the vendor's API 1.4.1) refreshed; env check names what is missing
 #   probe   read-only probe: stamps and cycle_time (0.31, 0.47), the emergency button
 #           watched (0.25), then --full: model and version (0.22), scale; then pairs
 #           act_q / act_flange_x in poses a human sets, compared with the description
@@ -24,33 +24,31 @@
 #           stop (ADR-0061); where the robot stood (0.27)
 #   task    TASK_TARGET at TASK_SCALE, three times, recorded
 #
-# Usage (the robot's address and archive as variables; targets in degrees, contract order):
-#   HOST=192.168.10.10 API_DIR=~/robopro_api bash scripts/phase5-stage4.sh env probe
-#   bash scripts/phase5-stage4.sh reqs refuse
-#   MOVE_TARGET="[0,-90,90,-90,-90,5]" bash scripts/phase5-stage4.sh move
-#   STOP_TARGET="[0,-90,90,-90,-90,40]" STOP_AFTER=3 bash scripts/phase5-stage4.sh stop
-#   TASK_TARGET="[...]" TASK_SCALE=0.25 bash scripts/phase5-stage4.sh task
+# Usage (the robot's address as a variable; targets in degrees, contract order):
+#   HOST=192.168.10.10 bash scripts/runs/rc5-stand.sh env probe
+#   bash scripts/runs/rc5-stand.sh reqs refuse
+#   MOVE_TARGET="[0,-90,90,-90,-90,5]" bash scripts/runs/rc5-stand.sh move
+#   STOP_TARGET="[0,-90,90,-90,-90,40]" STOP_AFTER=3 bash scripts/runs/rc5-stand.sh stop
+#   TASK_TARGET="[...]" TASK_SCALE=0.25 bash scripts/runs/rc5-stand.sh task
 #
+# Prerequisite: API_DIR=<archive> scripts/install.sh install robopro_rc (ADR-0071).
 # Conditions of every step: the vendor GUI does not control the robot during a run (0.5);
 # the controller is put into `run` by a human in the GUI (ADR-0054); after probe 0.22 the
 # model is written into examples/robots/rc5/profile.yaml (adapters.real.params.model).
 
 set -uo pipefail
 
-readonly APP="heron"                       # the command name; section 17 rename touches this line
+# shellcheck source=../lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly REPO_ROOT
 readonly PROFILE="$REPO_ROOT/examples/robots/rc5/profile.yaml"
 readonly DESCRIPTION="$REPO_ROOT/examples/robots/rc5/rc5.urdf"
 readonly SCENARIO="$REPO_ROOT/examples/scenarios/rc5_bench.yaml"
 readonly REGISTRY="$REPO_ROOT/examples/robots"
-readonly PACKAGE="$REPO_ROOT/examples/plugins/robopro_rc"
+readonly PROBE="$REPO_ROOT/scripts/tools/rc-probe.py"
 
 STAGE_ROOT="${STAGE_ROOT:-$HOME/phase5-stage4}"
 HOST="${HOST:-192.168.10.10}"
-API_DIR="${API_DIR:-$HOME/robopro_api}"
-PYTHON="${PYTHON:-python3.12}"             # the SDK supports 3.10-3.13, the platform 3.11+
 WATCH_S="${WATCH_S:-60}"
 PAIRS="${PAIRS:-5}"
 MOVE_TARGET="${MOVE_TARGET:-}"
@@ -59,9 +57,9 @@ STOP_AFTER="${STOP_AFTER:-3}"
 TASK_TARGET="${TASK_TARGET:-}"
 TASK_SCALE="${TASK_SCALE:-0.25}"
 TOLERANCE="${TOLERANCE:-0.5}"              # degrees, as the contract
-readonly STAGE_ROOT HOST API_DIR PYTHON WATCH_S PAIRS MOVE_TARGET STOP_TARGET STOP_AFTER \
+readonly STAGE_ROOT HOST WATCH_S PAIRS MOVE_TARGET STOP_TARGET STOP_AFTER \
     TASK_TARGET TASK_SCALE TOLERANCE
-readonly VENV="$STAGE_ROOT/venv"
+readonly VENV="$STACK_ROOT/robopro_rc/venv"   # examples/plugins/robopro_rc/install.sh
 readonly PY="$VENV/bin/python"
 readonly CLI="$VENV/bin/$APP"
 readonly RECORDS="$STAGE_ROOT/records"
@@ -114,11 +112,10 @@ exceeds() { "$PY" -c "import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.a
 
 step_env() {
     step "env: окружение стенда"
-    [[ -d $API_DIR/API ]] || { record "env архив API" отказ "нет $API_DIR/API"; return; }
-    "$PYTHON" -m venv "$VENV" && "$PY" -m pip install -q --upgrade pip
-    "$PY" -m pip install -q -e "$REPO_ROOT[record]" -e "$PACKAGE" "$API_DIR" \
-        && record "env установка" ok "платформа, пакет RC, API из $API_DIR" \
-        || record "env установка" отказ "pip install не прошёл"
+    [[ -x $PY ]] || { record "env окружение" отказ "нет $VENV: API_DIR=<архив> scripts/install.sh install robopro_rc"; return; }
+    bash "$REPO_ROOT/scripts/install.sh" sync robopro_rc \
+        && record "env окружение" ok "платформа, пакет RC и API $(dist_version "$PY" API) в $VENV" \
+        || record "env окружение" отказ "scripts/install.sh sync robopro_rc не прошёл"
     # The adapter's own requirements, as run checks them before connect (ADR-0025, ADR-0051).
     "$CLI" env check "$SCENARIO" --registry "$REGISTRY" --target real \
         && record "env требования" ok "адаптер real: API 1.4.1, numpy, scipy" \
@@ -129,17 +126,17 @@ step_probe() {
     step "probe: только чтение (0.22, 0.25, 0.31, 0.47, ADR-0055)"
     local out="$STAGE_ROOT/probe"
     mkdir -p "$out"
-    "$PY" scripts/phase5-probe.py --host "$HOST" --stamps 5 --json "$out/read_only.json" \
+    "$PY" "$PROBE" --host "$HOST" --stamps 5 --json "$out/read_only.json" \
         && record "probe read_only" ok "$out/read_only.json" \
         || record "probe read_only" отказ "подключение RTD не установлено"
-    "$PY" scripts/phase5-probe.py --host "$HOST" --full --stamps 0 --json "$out/full.json" \
+    "$PY" "$PROBE" --host "$HOST" --full --stamps 0 --json "$out/full.json" \
         && record "probe full (0.22)" ok "$(grep -o '"robot_model": "[^"]*"' "$out/full.json")" \
         || record "probe full (0.22)" отказ "full не подключился: «Пульс» держит управление?"
     info "кнопка: нажмите аварийный останов в течение $WATCH_S с и отпустите (0.25)"
-    "$PY" scripts/phase5-probe.py --host "$HOST" --stamps 0 --watch "$WATCH_S" \
+    "$PY" "$PROBE" --host "$HOST" --stamps 0 --watch "$WATCH_S" \
         --json "$out/watch.json" && record "probe кнопка (0.25)" ok "$out/watch.json"
     info "позы: $PAIRS поз человеком в «Пульсе», затем Enter"
-    "$PY" scripts/phase5-probe.py --host "$HOST" --stamps 0 --pairs "$PAIRS" \
+    "$PY" "$PROBE" --host "$HOST" --stamps 0 --pairs "$PAIRS" \
         --json "$out/pairs.json" \
         && "$PY" -m robopro_rc.kinematics "$out/pairs.json" --urdf "$DESCRIPTION" \
         | tee "$out/kinematics.txt" \

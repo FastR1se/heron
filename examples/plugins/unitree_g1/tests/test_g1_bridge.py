@@ -1,10 +1,10 @@
 """The G1's twin in Gazebo, as the platform asks it (ADR-0033, ADR-0034).
 
 Checked here is everything the twin writes; nothing compiles the controller or starts
-a world. That the controller builds and the robot moves is the Linux run's
-(scripts/phase4-stage5.sh). What this machine can check about the C++ side is that it
-speaks the parameter names, class and package the Python side writes -- read off its
-source, because a name spelled apart in two languages is how phase 2 lost scenes.
+a world. That the controller builds is the installer's (`scripts/install.sh install unitree_g1`),
+that the robot moves -- the Linux runs' (scripts/runs/). What this machine can check about the
+C++ side is that it speaks the parameter names, class and package the Python side writes --
+read off its source, because a name spelled apart in two languages is how phase 2 lost scenes.
 """
 
 from __future__ import annotations

@@ -5,17 +5,17 @@
 # adapter as a coded skill (docs/plans/phase6-learned-skill.md, "Этап 7"; ADR-0040, ADR-0063,
 # ADR-0064, ADR-0044, ADR-0046, ADR-0047).
 #
-# Built like scripts/phase6-stage4.sh and phase6-stage5.sh, on the same rule: a claim stands on
-# a confirmation taken by something other than the thing under test. The derivation is read off
+# Built like scripts/runs/arm6-train.sh and arm6-learned-gazebo.sh, on the same rule: a claim
+# stands on a confirmation taken by something other than the thing under test. The derivation is read off
 # the dry run and checked against numbers written here; the mount off Isaac's own body positions,
 # not off the description that asks for it; the threshold of ADR-0005 off nvidia-smi and /proc;
 # the artifact by `policy check` in the execution venv; motion off the run's record (ADR-0038)
 # by the metrics tool of phase 4. Nothing stops at the first failure.
 #
 #   env      versions and machine into conditions.md, with the run condition of ADR-0063; the
-#            mounted description written; the platform and the task in the training venv, the
-#            platform, the G1 package, mcap and onnxruntime in the adapter's venv; rclpy must
-#            NOT import in the training venv (invariant 2)
+#            mounted description written; the platform and the packages refreshed in the
+#            execution, training and G1 venvs (scripts/install.sh sync); rclpy must NOT import
+#            in the training venv (invariant 2)
 #   plan     validate; the gains stable at 500 Hz on the description's inertias; train env;
 #            train run --dry-run and its numbers
 #   mount    the mounted description converted by Isaac Lab and stepped: the pelvis must stand
@@ -31,32 +31,24 @@
 #   compare  tracking, steady-state error and time to goal from the two records
 #
 # Usage:
-#   bash scripts/phase6-stage7.sh                            # all steps, in order
-#   bash scripts/phase6-stage7.sh env plan mount             # the checks before any GPU hour
-#   ENVS=1024 ITER=1500 bash scripts/phase6-stage7.sh train check replay
-#   GUI=1 bash scripts/phase6-stage7.sh coded learned compare
-#   REF=g1_upper_reach@0123456789abcdef bash scripts/phase6-stage7.sh learned
+#   bash scripts/runs/g1-upper-learned.sh                            # all steps, in order
+#   bash scripts/runs/g1-upper-learned.sh env plan mount             # the checks before any GPU hour
+#   ENVS=1024 ITER=1500 bash scripts/runs/g1-upper-learned.sh train check replay
+#   GUI=1 bash scripts/runs/g1-upper-learned.sh coded learned compare
+#   REF=g1_upper_reach@0123456789abcdef bash scripts/runs/g1-upper-learned.sh learned
 #
-# Prerequisites: scripts/phase0.sh install isaac and exec; scripts/phase6-stage4.sh env passed
-# once (the training venv takes the platform); scripts/phase4-probe.sh 0.5 (venv-own-lib:
-# CycloneDDS 0.10.2 and the vendor's SDK) and scripts/phase4-stage5.sh env (unitree_hg and the
-# bridge built into $HOME/phase4-stage5/ws).
+# Prerequisites (ADR-0071): scripts/install.sh install exec train unitree_g1 --accept-nvidia-eula
+# -- the execution and training venvs, and the G1 package's venv (CycloneDDS 0.10.2, the vendor's
+# SDK) and workspace (unitree_hg, the bridge) in $STACK_ROOT/unitree_g1.
 #
 # Writes outside $STAGE_ROOT: the mounted description under examples/robots/*/vendor (gitignored);
-# `pip install --no-deps -e` of the platform and the task into the training venv, of the platform
-# and the G1 package into venv-own-lib, and mcap, onnxruntime there; the Kit cache in $HOME.
+# the platform and the packages reinstalled in the three venvs; the Kit cache in $HOME.
 
 set -uo pipefail
 
-readonly APP="heron"                       # the command name; section 17 rename touches this line
-ENV_PREFIX="${APP^^}"                      # variables the platform reads, built from the name
-readonly ENV_PREFIX
+# shellcheck source=../lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly REPO_ROOT
-readonly EXEC_VENV="$REPO_ROOT/.venv"
-readonly EXEC_PY="$EXEC_VENV/bin/python"
-readonly EXEC_CLI="$EXEC_VENV/bin/$APP"
 readonly ROBOT_NAME="g1_29dof_lock_waist_rev_1_0_mounted"
 readonly ROBOT_DIR="$REPO_ROOT/examples/robots/$ROBOT_NAME"
 readonly PROFILE="$ROBOT_DIR/profile.yaml"
@@ -67,19 +59,13 @@ readonly REGISTRY="$REPO_ROOT/examples/robots"
 readonly TRAIN_SCENARIO="$REPO_ROOT/examples/scenarios/g1_mounted_train.yaml"
 readonly SCENARIO="$REPO_ROOT/examples/scenarios/g1_mounted.yaml"
 readonly ROBOT_ID="g1"                     # both scenarios, robots[0].id
-readonly TASK_PACKAGE="$REPO_ROOT/examples/plugins/g1_upper_reach"
-readonly G1_PACKAGE="$REPO_ROOT/examples/plugins/unitree_g1"
 readonly TASK="g1_upper_reach"
-readonly GAINS="$REPO_ROOT/scripts/phase6-gains-check.py"
-readonly URDF_PROBE="$REPO_ROOT/scripts/phase6-probe-urdf.py"
-readonly ONNX_PROBE="$REPO_ROOT/scripts/phase6-probe-onnx.py"
-readonly METRICS="$REPO_ROOT/scripts/phase4-stage6-metrics.py"
-readonly ROS_SETUP="/opt/ros/jazzy/setup.bash"
+readonly GAINS="$REPO_ROOT/scripts/tools/gains-check.py"
+readonly URDF_PROBE="$REPO_ROOT/scripts/tools/isaac-urdf-probe.py"
+readonly ONNX_PROBE="$REPO_ROOT/scripts/tools/onnx-compare.py"
+readonly METRICS="$REPO_ROOT/scripts/tools/record-metrics.py"
 
-TRAIN_ROOT="${TRAIN_ROOT:-$HOME/train-stack}"
 STAGE_ROOT="${STAGE_ROOT:-$HOME/phase6-stage7}"
-STAGE5_ROOT="${STAGE5_ROOT:-$HOME/phase4-stage5}"        # the colcon workspace of the bridge
-PROBE_ROOT="${PROBE_ROOT:-$HOME/phase4-probe}"           # venv-own-lib, the adapter's venv
 ENVS="${ENVS:-512}"
 ITER="${ITER:-1500}"
 SEED="${SEED:-1}"
@@ -93,16 +79,14 @@ GUI="${GUI:-0}"
 WORLD_WAIT="${WORLD_WAIT:-90}"            # seconds for Gazebo and the bridge to come up
 SETTLE="${SETTLE:-5}"                     # seconds the arms hang before the run, as in training's reset
 RUN_TIMEOUT="${RUN_TIMEOUT:-120}"
-readonly TRAIN_ROOT STAGE_ROOT STAGE5_ROOT PROBE_ROOT ENVS ITER SEED DEVICE TRAIN_TIMEOUT
+readonly STAGE_ROOT ENVS ITER SEED DEVICE TRAIN_TIMEOUT
 readonly URDF_TIMEOUT MOUNT_STEPS HEARTBEAT SAMPLE GUI WORLD_WAIT SETTLE RUN_TIMEOUT
-readonly TRAIN_VENV="$TRAIN_ROOT/venv"
-readonly TRAIN_PY="$TRAIN_VENV/bin/python"
-readonly TRAIN_CLI="$TRAIN_VENV/bin/$APP"
-readonly ISAACLAB_DIR="$TRAIN_ROOT/IsaacLab"
-readonly VENV_OWN="$PROBE_ROOT/venv-own-lib"
+# The G1 package's environment (examples/plugins/unitree_g1/install.sh): the adapter's venv with
+# CycloneDDS 0.10.2 and no rclpy, and the workspace of the bridge.
+readonly VENV_OWN="$STACK_ROOT/unitree_g1/venv"
 readonly OWN_PY="$VENV_OWN/bin/python"
 readonly OWN_CLI="$VENV_OWN/bin/$APP"
-readonly WS="$STAGE5_ROOT/ws"
+readonly WS="$STACK_ROOT/unitree_g1/ws"
 readonly RUN_HOME="$STAGE_ROOT/data"      # <PREFIX>_HOME: runs and the USD cache live here
 readonly STORE="$STAGE_ROOT/store"
 readonly PROFILES="$STAGE_ROOT/registry"  # copies of the profile; the repository's is not edited
@@ -232,14 +216,27 @@ version_of() {  # version_of <python> <distribution>
 
 need_train_stack() {
     [[ -x $TRAIN_PY ]] && return 0
-    record "стек обучения" отказ "нет $TRAIN_PY (scripts/phase0.sh install isaac)"
+    record "стек обучения" отказ "нет $TRAIN_PY (scripts/install.sh install train --accept-nvidia-eula)"
     return 1
 }
 
 need_adapter_venv() {
     [[ -x $OWN_CLI ]] && return 0
-    record "окружение адаптера" отказ "нет $OWN_CLI (scripts/phase4-probe.sh 0.5, затем шаг env)"
+    record "окружение адаптера" отказ "нет $OWN_CLI (scripts/install.sh install unitree_g1)"
     return 1
+}
+
+# sync_env <label> <environment>: the platform and the packages of this checkout reinstalled
+# there -- entry points are written at install time, and the twin must know the upper body
+# (ADR-0064).
+sync_env() {
+    local log="$STAGE_ROOT/install-$2.log"
+    if clean "bash '$REPO_ROOT/scripts/install.sh' sync $2" > "$log" 2>&1; then
+        record "$1" ok "$3"
+    else
+        record "$1" отказ "см. $log"
+        tail -n 20 "$log" | sed 's/^/      /'
+    fi
 }
 
 # The profile, copied with one line of `skills` rewritten -- invariant 4 as a file operation.
@@ -277,13 +274,7 @@ step_env() {
     if need_train_stack; then
         # The platform in the training venv: the same code computes contract_id on both sides
         # of the boundary (ADR-0044, item 3); the task is found there by its entry point.
-        if clean "'$TRAIN_PY' -m pip install --no-deps -e '$REPO_ROOT' -e '$TASK_PACKAGE'" \
-                > "$STAGE_ROOT/install-train.log" 2>&1; then
-            record "платформа и задача в окружении обучения" ok "$(version_of "$TRAIN_PY" "$APP")"
-        else
-            record "платформа и задача в окружении обучения" отказ "см. $STAGE_ROOT/install-train.log"
-            tail -n 20 "$STAGE_ROOT/install-train.log" | sed 's/^/      /'
-        fi
+        sync_env "платформа и задача в окружении обучения" train "$(version_of "$TRAIN_PY" "$APP")"
         if clean "'$TRAIN_PY' -c 'import rclpy'" > /dev/null 2>&1; then
             record "rclpy в окружении обучения" отказ "импортируется — граница миров нарушена (ADR-0003)"
         else
@@ -296,28 +287,18 @@ step_env() {
         fi
     fi
 
-    # The adapter's venv runs `run`: CycloneDDS 0.10.2 and the SDK are there (phase 4); what a
-    # learned skill and a record add is onnxruntime and mcap (ADR-0047, ADR-0038).
+    # The adapter's venv runs `run`: CycloneDDS 0.10.2 and the SDK are there, and the platform with
+    # the groups a learned skill and a record need -- onnxruntime and mcap (ADR-0047, ADR-0038).
     if need_adapter_venv; then
-        if clean "'$OWN_PY' -m pip install -q --no-cache-dir --timeout 120 --retries 5 pydantic pyyaml typer packaging mcap numpy onnxruntime && '$OWN_PY' -m pip install -q --no-cache-dir --no-deps -e '$REPO_ROOT' -e '$G1_PACKAGE'" \
-                > "$STAGE_ROOT/install-own.log" 2>&1; then
-            record "окружение адаптера" ok "onnxruntime $(version_of "$OWN_PY" onnxruntime), mcap $(version_of "$OWN_PY" mcap)"
-        else
-            record "окружение адаптера" отказ "см. $STAGE_ROOT/install-own.log"
-            tail -n 20 "$STAGE_ROOT/install-own.log" | sed 's/^/      /'
-        fi
+        sync_env "окружение адаптера" unitree_g1 \
+            "onnxruntime $(version_of "$OWN_PY" onnxruntime), mcap $(version_of "$OWN_PY" mcap)"
     fi
     # The execution venv starts the world: the G1 package's Gazebo twin is found there by its
-    # entry point, and it must be this checkout's -- it knows the upper body (ADR-0064).
-    if clean "cd '$REPO_ROOT' && uv pip install --python '$EXEC_PY' --no-deps -e '$G1_PACKAGE'" \
-            > "$STAGE_ROOT/install-exec.log" 2>&1; then
-        record "пакет G1 в окружении исполнения" ok "$(version_of "$EXEC_PY" unitree-g1)"
-    else
-        record "пакет G1 в окружении исполнения" отказ "см. $STAGE_ROOT/install-exec.log"
-    fi
+    # entry point.
+    sync_env "пакет G1 в окружении исполнения" exec "$(version_of "$EXEC_PY" unitree-g1)"
     [[ -f $WS/install/setup.bash ]] \
         && record "мост G1 собран" ok "$WS" \
-        || record "мост G1 собран" отказ "нет $WS/install/setup.bash: bash scripts/phase4-stage5.sh env"
+        || record "мост G1 собран" отказ "нет $WS/install/setup.bash: scripts/install.sh install unitree_g1"
 
     gpu="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null || echo нет)"
     ram="$(awk '/MemTotal/{printf "%.1f ГиБ", $2/1048576}' /proc/meminfo)"
@@ -598,7 +579,7 @@ run_against_world() {  # run_against_world <name> <registry>
     rm -rf "$dir"; mkdir -p "$dir"
     (( GUI )) && flags=""
     need_adapter_venv || return 1
-    [[ -f $WS/install/setup.bash ]] || { record "$name: мир" отказ "нет $WS (scripts/phase4-stage5.sh env)"; return 1; }
+    [[ -f $WS/install/setup.bash ]] || { record "$name: мир" отказ "нет $WS (scripts/install.sh install unitree_g1)"; return 1; }
 
     start_group "$dir/world.log" "$WS_ENV && cd '$REPO_ROOT' && exec '$EXEC_CLI' sim run '$SCENARIO' --into '$dir/gen' --registry '$registry' $flags"
     local world="$LAST_GROUP"

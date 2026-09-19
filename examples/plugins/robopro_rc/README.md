@@ -19,8 +19,19 @@ uv pip install -e examples/plugins/robopro_rc
 ```
 
 Этого достаточно для тестов: всё, что решает адаптер, проверяется на записывающем канале. Живой связи
-нужен архив API «Робопро» версии **1.4.1** (Python 3.10–3.13; зависимости — numpy и scipy):
-`pip install <каталог архива>`. Архив в репозиторий не кладётся — лицензии в нём нет.
+нужен архив API «Робопро» версии **1.4.1** (Python 3.10–3.13; зависимости — numpy и scipy). Архив в
+репозиторий не кладётся — лицензии в нём нет.
+
+На Linux окружение стенда ставит установщик пакета [`install.sh`](install.sh) (ADR-0071): venv в
+`~/robot-stack/robopro_rc` с платформой, пакетом и API из распакованного архива:
+
+```bash
+API_DIR=~/robopro_api scripts/install.sh install robopro_rc   # каталог, в котором лежит API/
+scripts/install.sh verify robopro_rc
+source scripts/activate.sh robopro_rc                          # run --target real
+```
+
+Без архива установщик пропускает пакет и говорит об этом, остальная установка продолжается.
 
 ## Связь
 
@@ -71,5 +82,5 @@ python -m robopro_rc.kinematics pairs.json --urdf examples/robots/rc5/rc5.urdf
 
 ## Стенд
 
-`scripts/phase5-probe.py` — проба только чтения; `scripts/phase5-stage4.sh` — шаги этапа 4
+`scripts/tools/rc-probe.py` — проба только чтения; `scripts/runs/rc5-stand.sh` — шаги этапа 4
 (`env probe reqs refuse move stop task`), от безопасного к рискованному, с человеком у кнопки.

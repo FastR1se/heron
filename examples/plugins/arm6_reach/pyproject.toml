@@ -8,12 +8,13 @@ license = { text = "MIT" }
 
 # The platform is a dependency like any other, and what this package takes from it
 # is its public API and nothing else (ADR-0021, ADR-0044); a test in the platform
-# reads the imports to hold it to that.
+# reads the imports to hold it to that. The sixth extension point arrives with 0.5, and
+# main carries it as 0.5.0.dev0 until the release.
 #
 # Isaac Lab is deliberately not listed. It is not installable from an index the way
 # a library is, it lives in the training environment, and the backend declares it as
 # an environment requirement the platform checks before a run (ADR-0025).
-dependencies = ["heron>=0.5"]
+dependencies = ["heron>=0.5.0.dev0"]
 
 # The sixth extension point. The name is what a scenario's learner writes in its
 # `task` field, and the name the artifact is stored under.

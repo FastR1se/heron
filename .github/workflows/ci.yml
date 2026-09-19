@@ -28,10 +28,12 @@ jobs:
       # Фаза 4: пакет робота ставится рядом с платформой, как пакет производителя
       # (ADR-0021). Общий набор адаптеров пакет прогоняет из своих тестов (ADR-0056).
       # Фаза 5: пакет RC — тем же путём; SDK производителя здесь нет и не нужен.
+      # Пакеты задач обучения ставятся обычной командой: main — 0.5.0.dev0 (ADR-0071).
       - name: Поставить ядро с dev-зависимостями и пакеты роботов
         run: |
           uv venv --python 3.11
-          uv pip install -e ".[dev]" -e examples/plugins/unitree_g1 -e examples/plugins/robopro_rc
+          uv pip install -e ".[dev]" -e examples/plugins/unitree_g1 -e examples/plugins/robopro_rc \
+            -e examples/plugins/arm6_reach -e examples/plugins/g1_upper_reach
 
       # Фаза 4: описание G1 — вход производителя, в репозитории лежат только
       # источник и коммит (ADR-0017). Без загрузки тесты на настоящем файле
@@ -58,6 +60,23 @@ jobs:
       # Фаза 5: адаптер RC на записывающем канале и на заменителе SDK (ADR-0053, ADR-0062).
       - name: Тесты пакета RC
         run: uv run pytest -v examples/plugins/robopro_rc/tests
+
+      # Фаза 6: задачи обучения без Isaac — вывод среды и наблюдения (ADR-0044).
+      - name: Тесты пакетов задач
+        run: uv run pytest -v examples/plugins/arm6_reach/tests examples/plugins/g1_upper_reach/tests
+
+      # ADR-0071: установщик на этой машине ничего не ставит (нет ROS 2), но разбирается, находит
+      # установщики пакетов и отказывает до работы на неизвестном компоненте.
+      - name: Скрипты установки
+        run: |
+          for f in scripts/*.sh scripts/lib/*.sh scripts/runs/*.sh examples/plugins/*/install.sh; do
+            bash -n "$f"
+          done
+          scripts/install.sh help | grep -F "unitree_g1"
+          if scripts/install.sh check no_such_component; then
+            echo "установщик принял неизвестный компонент"; exit 1
+          fi
+          scripts/install.sh status
 
   core-without-robots:
     name: Инвариант 1 — ядро без роботов

@@ -1,7 +1,7 @@
 """Phase 6, stage 0, facts 0.17 and 0.18: what an exported policy looks like from outside.
 
-Three modes, run by ``scripts/phase6-probe.sh onnx`` in two different interpreters -- which is
-the point: the policy crosses the boundary between worlds as a file (invariant 2), so the file
+Three modes, run by the ``replay`` steps of ``scripts/runs/`` in two different interpreters --
+which is the point: the policy crosses the boundary between worlds as a file (invariant 2), so the file
 has to give the same answer to a reader that shares nothing with the writer.
 
 ``describe``  (probe venv, onnxruntime) names, shapes and types of inputs and outputs, opset.

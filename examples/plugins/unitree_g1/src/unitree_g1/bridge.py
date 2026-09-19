@@ -63,16 +63,18 @@ PARAMETERS: Final = ("joints", "slots", "mode_machine", "command_topic", "state_
 exactly these, and a test of the package reads its source to hold the two together."""
 
 BRIDGE_PACKAGES: Final[dict[str, str]] = {
-    BRIDGE_PACKAGE: "colcon build --base-paths examples/plugins/unitree_g1/ros2 "
-    "<путь к unitree_hg> --packages-select unitree_hg unitree_g1_bridge; source install/setup.bash "
-    "(scripts/phase4-stage5.sh env)",
-    MESSAGES_PACKAGE: "colcon build из unitree_ros2, cyclonedds_ws/src/unitree/unitree_hg; "
-    "source install/setup.bash",
-    RMW: "sudo apt install ros-jazzy-rmw-cyclonedds-cpp",
-    "controller_manager": "sudo apt install ros-jazzy-ros2-control (ставит scripts/phase0.sh)",
-    "gz_ros2_control": "sudo apt install ros-jazzy-gz-ros2-control (ставит scripts/phase0.sh)",
+    BRIDGE_PACKAGE: "scripts/install.sh install unitree_g1 (часть ws), затем окружение мира: "
+    "source scripts/activate.sh ros",
+    MESSAGES_PACKAGE: "scripts/install.sh install unitree_g1 (часть ws, unitree_hg из "
+    "unitree_ros2), затем source scripts/activate.sh ros",
+    RMW: "scripts/install.sh install unitree_g1 (часть ws) или sudo apt install "
+    "ros-jazzy-rmw-cyclonedds-cpp",
+    "controller_manager": "sudo apt install ros-jazzy-ros2-control "
+    "(ставит scripts/install.sh install ros2)",
+    "gz_ros2_control": "sudo apt install ros-jazzy-gz-ros2-control "
+    "(ставит scripts/install.sh install gazebo)",
     "joint_state_broadcaster": "sudo apt install ros-jazzy-ros2-controllers "
-    "(ставит scripts/phase0.sh)",
+    "(ставит scripts/install.sh install ros2)",
 }
 """Every ROS 2 package this twin names in what it writes, and how each gets onto a machine:
 the controller and the broadcaster in the manager's file, the hardware component and the

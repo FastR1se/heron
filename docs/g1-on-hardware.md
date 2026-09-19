@@ -16,9 +16,9 @@
 > трещали. Прогон не записывался, причина не установлена, измерений на железе пока нет.
 
 Всё делается на **Linux-машине** (Ubuntu 24.04). На Windows — только проверки без робота
-(шаг 10).
+(шаг 6).
 
-Обозначения: `~/heron` — клон репозитория, `~/g1` — новый каталог под всё вендорское.
+Обозначения: `~/heron` — клон репозитория, `~/g1` — каталог под ваши файлы робота: сцену и записи прогонов.
 
 ---
 
@@ -34,7 +34,7 @@
 
 # Часть 1. Зависимости (делается один раз)
 
-## Почему это выглядит сложно
+## Почему это не `pip install`
 
 Три факта, из которых растёт вся возня:
 
@@ -43,95 +43,48 @@
 2. Версия **0.11 и новее запрещена** ([ADR-0022](decisions/0022-vendor-dds-environment.md)). Не
    «нежелательна»: её участник, обнаружив в сети робота на 0.10.2, роняет процессы робота. Поэтому
    `pip install cyclonedds` без версии — прямой путь к поломке.
-3. Платформа **не опубликована в PyPI**. Пакет G1 объявляет зависимость `heron>=0.3`, и обычная
-   установка пошла бы искать её в интернете и упала. Лечится флагом `--no-deps` и установкой
-   настоящих зависимостей ядра руками.
+3. В процессе робота не должно быть ROS 2: он принёс бы свою CycloneDDS.
 
-Поэтому робот получает **отдельный venv**, никак не связанный с `.venv` репозитория.
+Поэтому робот получает **отдельный venv**, никак не связанный с `.venv` репозитория. Всё это делает
+установщик пакета G1 ([ADR-0071](decisions/0071-one-installer-packages-install-themselves.md)).
 
-## Шаг 1. Системные пакеты
-
-```bash
-sudo apt update
-sudo apt install -y git cmake build-essential bison python3-dev python3.12-venv libssl-dev
-```
-
-## Шаг 2. Исходники на закреплённых версиях
+## Шаг 1. Окружение робота одной командой
 
 ```bash
-mkdir -p ~/g1 && cd ~/g1
-git clone https://github.com/eclipse-cyclonedds/cyclonedds.git cyclonedds-src
-git -C cyclonedds-src checkout 0.10.2
-
-git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
-git -C unitree_sdk2_python checkout 65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5
+cd ~/heron
+scripts/install.sh install unitree_g1
 ```
 
-Коммит SDK закреплён намеренно: на нём всё проверялось в фазе 4.
-
-## Шаг 3. Собрать C-библиотеку CycloneDDS
-
-```bash
-cmake -S ~/g1/cyclonedds-src -B ~/g1/cyclonedds-build \
-      -DCMAKE_INSTALL_PREFIX=$HOME/g1/cyclonedds-install \
-      -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DENABLE_SHM=OFF
-cmake --build ~/g1/cyclonedds-build --target install -j$(nproc)
-```
-
-Проверка — файл обязан существовать:
-
-```bash
-ls ~/g1/cyclonedds-install/lib/libddsc.so || ls ~/g1/cyclonedds-install/lib64/libddsc.so
-```
-
-Нет файла — дальше идти бессмысленно, причина в выводе сборки.
-
-## Шаг 4. Venv робота: обвязка Python и SDK
-
-```bash
-python3.12 -m venv ~/g1/venv
-source ~/g1/venv/bin/activate
-```
-
-**В этом терминале никогда не выполняйте `source /opt/ros/jazzy/setup.bash`.** ROS 2 принесёт свою
-CycloneDDS, и связь сломается. Платформа этого не проверяет — это правило окружения
-([ADR-0022](decisions/0022-vendor-dds-environment.md)).
-
-```bash
-CYCLONEDDS_HOME=$HOME/g1/cyclonedds-install pip install --no-cache-dir "cyclonedds==0.10.2" numpy pyyaml
-pip install --no-cache-dir --no-deps -e ~/g1/unitree_sdk2_python
-```
+Спросит пароль `sudo` для системных пакетов, соберёт CycloneDDS 0.10.2, обвязку Python против неё,
+поставит SDK производителя на закреплённом коммите, платформу и пакет G1 в venv
+`~/robot-stack/unitree_g1/venv`. Заодно соберёт мост для Gazebo и двойник MuJoCo — для железа они не
+нужны, но и не мешают; только железо — `scripts/install.sh install unitree_g1 dds venv`.
 
 Проверка:
 
 ```bash
-python -c "import cyclonedds, unitree_sdk2py.core.channel; from importlib.metadata import version; print('cyclonedds', version('cyclonedds'))"
+scripts/install.sh verify unitree_g1
 ```
 
-Должно напечататься ровно `cyclonedds 0.10.2`. Любая другая версия — `pip uninstall cyclonedds` и
-повторить строку с `CYCLONEDDS_HOME`.
+Должно быть `ok окружение адаптера: cyclonedds 0.10.2, SDK, платформа; rclpy не загружен`.
 
-## Шаг 5. Платформа и пакет G1 в тот же venv
+Каждый новый терминал для робота начинается так:
 
 ```bash
-pip install --no-cache-dir pydantic pyyaml typer packaging mcap
-pip install --no-cache-dir --no-deps -e ~/heron -e ~/heron/examples/plugins/unitree_g1
+cd ~/heron && source scripts/activate.sh unitree_g1
 ```
 
-Первая строка — настоящие зависимости ядра плюс `mcap` для записи прогона. Вторая — платформа и
-пакет робота без разрешения зависимостей.
-
-Проверка:
+**В этом терминале не выполняйте `source /opt/ros/jazzy/setup.bash`** — `activate.sh` откажет, если ROS 2
+уже подключён (проверьте `~/.bashrc`). Проверка окружения:
 
 ```bash
 heron version
 heron skill list                                                  # goto_joints, hold, move_joints
-python -c "from heron.core.plugins import available; print(available('adapters'))"
 ```
 
-В последней строке должен быть `unitree_g1_dds`. Нет — пакет не установился, вернитесь к шагу 5.
+После `git pull` пакет переставляется без сборок: `scripts/install.sh sync unitree_g1`.
 
-## Шаг 6. Тело робота, его профиль и описание
+## Шаг 2. Тело робота, его профиль и описание
 
 G1 выпускается в нескольких исполнениях, и платформа сверяет исполнение до первой команды: робот
 сообщает `mode_machine`, а адаптер требует, чтобы тело с таким номером совпало с суставами профиля
@@ -161,7 +114,7 @@ cd ~/heron && python examples/robots/<профиль>/fetch_description.py
 
 # Часть 2. Настройка под ваш экземпляр
 
-## Шаг 7. Найти сетевой интерфейс
+## Шаг 3. Найти сетевой интерфейс
 
 ```bash
 ip -brief address
@@ -178,7 +131,7 @@ ping -c3 <IP робота>
 цель, следующая — скачок цели и момента. По Wi-Fi прогон не отменится, но будет трещать. Имя
 беспроводного интерфейса (`wl…`) в `interface` — признак этой ошибки.
 
-## Шаг 8. Добавить в профиль связь с железом
+## Шаг 4. Добавить в профиль связь с железом
 
 В [examples/robots/g1_23dof/profile.yaml](../examples/robots/g1_23dof/profile.yaml) найдите блок
 `adapters:` и допишите в конец:
@@ -190,12 +143,12 @@ ping -c3 <IP робота>
 ```
 
 `domain: 0` — домен настоящего робота (у двойника производителя 1). `interface` — то, что вы нашли
-на шаге 7. `peers` на настоящей сети не задают: обнаружение идёт мультикастом.
+на шаге 3. `peers` на настоящей сети не задают: обнаружение идёт мультикастом.
 
 Адаптеры в контракт не входят, поэтому `contract_id` не меняется: ни `revision`, ни
 `contract lock` трогать не нужно.
 
-## Шаг 9. Создать сцену
+## Шаг 5. Создать сцену
 
 Файл `~/g1/g1_real.yaml`:
 
@@ -214,9 +167,9 @@ task:
 `world: dummy` — потому что симулятора здесь нет, робот настоящий; сценарий всё равно проверяется
 целиком ([ADR-0051](decisions/0051-a-real-run-is-chosen-by-target.md)). Цель — руки вперёд и локти
 согнуты, ноги в нуле, в порядке `contract.joint_order`. `duration: 8.0` — медленно: у G1 замедлять
-можно только длительностью (см. шаг 13).
+можно только длительностью (см. шаг 9).
 
-## Шаг 10. Проверки, пока робот выключен
+## Шаг 6. Проверки, пока робот выключен
 
 ```bash
 cd ~/heron
@@ -236,7 +189,7 @@ heron run ~/g1/g1_real.yaml -R ~/heron/examples/robots --target real --speed-sca
 
 # Часть 3. Робот
 
-## Шаг 11. Безопасность — до включения
+## Шаг 7. Безопасность — до включения
 
 - **Робот на подвесе.** Уровень доступа `low` — встроенный контроллер выключен, равновесие не держит
   никто, а навык командует всеми суставами профиля, включая ноги
@@ -251,7 +204,7 @@ heron run ~/g1/g1_real.yaml -R ~/heron/examples/robots --target real --speed-sca
   ([ADR-0054](decisions/0054-rc-body-identity-and-a-human-releases-brakes.md)).
 - **Физическая кнопка останова — под рукой.**
 
-## Шаг 12. Первое подключение — без единой команды
+## Шаг 8. Первое подключение — без единой команды
 
 Самый безопасный способ проверить связь: `connect` только ждёт состояние робота и сверяет, то ли это
 тело; команд он не шлёт. Сохраните как `~/g1/read_state.py`:
@@ -281,7 +234,7 @@ python ~/g1/read_state.py
 Напечатались числа, по одному на сустав профиля (у `g1_23dof` — 23), — связь есть, тело опознано.
 Робот при этом не получил ни одной команды.
 
-## Шаг 13. Запуск
+## Шаг 9. Запуск
 
 ```bash
 heron run ~/g1/g1_real.yaml -R ~/heron/examples/robots --target real --speed-scale 1 --record ~/g1/first.mcap
@@ -308,22 +261,20 @@ heron run ~/g1/g1_real.yaml -R ~/heron/examples/robots --target real --speed-sca
 
 | Сообщение | Что не так |
 |---|---|
-| `heron: command not found` | не активирован venv: `source ~/g1/venv/bin/activate` |
-| `env.missing … модуль Python cyclonedds` | шаг 4 сделан не в этом venv |
-| `env.forbidden … cyclonedds >=0.11` | стоит новая версия: `pip uninstall cyclonedds`, затем строка с `CYCLONEDDS_HOME` из шага 4 |
-| `env.missing … unitree_sdk2py` | не выполнена последняя строка шага 4 |
-| `ModuleNotFoundError: pydantic` (или `typer`) | не выполнена первая строка шага 5 |
-| pip ищет `heron` в интернете и падает | забыт `--no-deps` во второй строке шага 5 |
+| `heron: command not found` | не активировано окружение: `source scripts/activate.sh unitree_g1` |
+| `env.missing … модуль Python cyclonedds` или `unitree_sdk2py` | не то окружение или шаг 1 не пройден: `scripts/install.sh verify unitree_g1` |
+| `env.forbidden … cyclonedds >=0.11` | в окружение попала новая версия: `rm -rf ~/robot-stack/unitree_g1/venv`, затем шаг 1 |
+| `activate.sh`: «в этой оболочке подключён ROS 2» | ROS 2 подключается в `~/.bashrc`; новый терминал без него |
 | `профиль 'g1_23dof' не найден` | неверный путь в `-R`: нужен `~/heron/examples/robots` |
-| `urdf.file_not_found` | не выполнен шаг 6 |
-| `нет адаптера 'real'` | не дописан блок из шага 8 |
+| `urdf.file_not_found` | не выполнен шаг 2 |
+| `нет адаптера 'real'` | не дописан блок из шага 4 |
 | `цель 'real': шкала скорости обязательна` | добавьте `--speed-scale 1` |
 | `адаптер 'unitree_g1_dds' не исполняет шкалу скорости` | допустима только `--speed-scale 1`; замедляйте через `duration` |
 | `связь 'real' не установлена` | не тот интерфейс или домен, робот не в низкоуровневом режиме, сеть |
-| `на связи тело mode_machine = …` | профиль не того исполнения: выберите по таблице шага 6 |
+| `на связи тело mode_machine = …` | профиль не того исполнения: выберите по таблице шага 2 |
 | `профиль 'g1_27dof' не найден` | профиль переименован в `g1_29dof_lock_waist_rev_1_0` — по описанию производителя |
 | `состояние не обновлялось …` | сторожевой таймер: робот замолчал — сеть, питание, режим |
-| суставы трещат, робот дёргается | не включён режим отладки (шаг 11) или связь по Wi-Fi (шаг 7); запись `--record` покажет пропуски `tick` |
+| суставы трещат, робот дёргается | не включён режим отладки (шаг 7) или связь по Wi-Fi (шаг 3); запись `--record` покажет пропуски `tick` |
 
 ---
 

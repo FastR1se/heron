@@ -3,11 +3,11 @@
 
 A record is read with the ``mcap`` library directly, not with the platform's reader:
 the record is the platform's claim about a run, and it is read by a tool other than
-the one that wrote it (the lesson of scripts/phase4-stage1.sh). Standard library and
+the one that wrote it (the lesson of phase 4, stage 1). Standard library and
 ``mcap`` only.
 
-    phase4-stage6-metrics.py run RECORD --label mujoco-1 [--hold HOLD.json] --out M.json
-    phase4-stage6-metrics.py table M1.json M2.json ...
+    record-metrics.py run RECORD --label mujoco-1 [--hold HOLD.json] --out M.json
+    record-metrics.py table M1.json M2.json ...
 
 Every quantity is defined in docs/experiments/0001-g1-dds-twins.md, «Величины», and the
 names below follow it. Nothing here knows the robot but what the record says: the joint

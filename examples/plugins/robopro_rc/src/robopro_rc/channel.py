@@ -128,7 +128,7 @@ class LinkConfig:
             raise LinkConfigError(
                 f"params.model: нужна модель робота ровно так, как её возвращает "
                 f"get_robot_info().robot_model, получено {model!r}. Значение даёт проба "
-                f"0.22: python scripts/phase5-probe.py --host <адрес> --api-dir <архив> --full "
+                f"0.22: python scripts/tools/rc-probe.py --host <адрес> --api-dir <архив> --full "
                 f"(ADR-0054)"
             )
         return cls(host=host.strip(), model=model)

@@ -1,7 +1,7 @@
 # RC5 командного класса в мире из чисел (ADR-0049, ADR-0051). Та же миссия идёт на
 # железо целью, а не другим сценарием — и только с явной шкалой скорости (ADR-0052):
 #   run rc5_bench.yaml --registry examples/robots --target real --speed-scale 0.1
-# На стенде цель задаёт человек, видящий робота: -g "target=[...]" (scripts/phase5-stage4.sh).
+# На стенде цель задаёт человек, видящий робота: -g "target=[...]" (scripts/runs/rc5-stand.sh).
 schema_version: 1
 name: rc5_bench
 

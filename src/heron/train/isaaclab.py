@@ -78,7 +78,7 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = (
     needs(
         RequirementKind.PYTHON,
         "isaaclab",
-        hint="окружение обучения ставится по инструкции Isaac Lab; фаза 0 его не ставит",
+        hint="окружение обучения: scripts/install.sh install train --accept-nvidia-eula",
     ),
     needs(
         RequirementKind.PYTHON,

@@ -232,7 +232,7 @@ Isaac Lab **v2.3.0**, коммит `3c6e67b` (28.10.2025), разреженна�
 |---|---|
 | 1.1 [ADR-0041](../decisions/0041-policy-action-mapping-is-normative.md) | `Contract.default_pose`, `ActionSpec.scale` и `offset`, реестр `ActionOffset`; незаданное в каноническую форму не попадает — золотой идентификатор не изменился. Правила `contract.default_pose_outside_limits`, `contract.action_outside_limits`, `contract.action_envelope_unknown` |
 | 1.2 [ADR-0042](../decisions/0042-observation-terms-cover-the-contract.md) | термы `joint_pos_rel` и `target_joint_pos`; выводимые `observation_size`, `action_size`, `term_size` |
-| 1.5 [ADR-0045](../decisions/0045-one-drive-law-in-both-worlds.md) | `interpolation_method: none` у генератора и точка `time_from_start: 0` с нулевыми скоростями у адаптера; `kp`/`kd` `arm6` из инерций URDF (`scripts/phase6-arm6-gains.py`), `revision: 2` |
+| 1.5 [ADR-0045](../decisions/0045-one-drive-law-in-both-worlds.md) | `interpolation_method: none` у генератора и точка `time_from_start: 0` с нулевыми скоростями у адаптера; `kp`/`kd` `arm6` из инерций URDF (`scripts/tools/arm-gains.py`), `revision: 2` |
 | 1.6 [ADR-0046](../decisions/0046-policy-artifact-and-skill-binding.md) | `store/policies.py`: каталог артефакта, `artifact_id` от манифеста, атомарная запись, `train.json`; ссылка `<name>@<id>`; привязка в `skills` профиля; `policy show`, `policy check` |
 | 1.7 [ADR-0047](../decisions/0047-learned-skill.md) | `skills/learned.py`: сверка до `connect`, коды `policy.*`, такт «наблюдение → сеть → клип → отображение → команда → завершение» |
 | 1.8 [ADR-0048](../decisions/0048-usd-is-derived-and-base-fixing-comes-from-the-description.md) (часть) | звено `world` и фиксированный сустав в `arm6.urdf`; USD — на этапе 3 |
@@ -324,7 +324,7 @@ Isaac Lab **v2.3.0**, коммит `3c6e67b` (28.10.2025), разреженна�
 
 ## Этап 4. Обучение `arm6` на Linux
 
-`scripts/phase6-stage4.sh` (написан на этапе 3): шаги `env`, `plan`, `train`, `check`, `replay` — условия;
+`scripts/runs/arm6-train.sh` (написан на этапе 3 как `phase6-stage4.sh`, ADR-0071): шаги `env`, `plan`, `train`, `check`, `replay` — условия;
 `train` с числом сред из порога; экспорт; `policy check` против профиля в окружении **исполнения**; паритет
 ONNX и TorchScript. Пик VRAM, RAM и свопа снимаются снаружи процесса, порог ADR-0005 на этой задаче — строка
 эксперимента.
@@ -333,7 +333,7 @@ ONNX и TorchScript. Пик VRAM, RAM и свопа снимаются снар�
 
 ## Этап 5. Обученный навык в Gazebo (Linux)
 
-`scripts/phase6-stage5.sh` (написан на этапе 3): шаги `env`, `coded`, `learned`, `diverge`, `compare` —
+`scripts/runs/arm6-learned-gazebo.sh` (написан на этапе 3 как `phase6-stage5.sh`): шаги `env`, `coded`, `learned`, `diverge`, `compare` —
 сцена `table`; `run` навыком кодом и обученным на одной цели, с записью (ADR-0038); замена — одна строка
 профиля, и скрипт показывает её диффом; шесть внесённых расхождений артефакта — отказы до подключения; числа
 из записей считает средство метрик фазы 4.
@@ -358,7 +358,7 @@ ONNX и TorchScript. Пик VRAM, RAM и свопа снимаются снар�
 ### Итог этапа 7 (Windows, 19.09.2026)
 
 Карточка о балансе — до кода, как требует ADR-0040, п. 5. Код и проверки — всё, что можно сделать без Isaac и без
-Linux. Обучения и прогона в Gazebo не было: они — `scripts/phase6-stage7.sh` на Linux.
+Linux. Обучения и прогона в Gazebo не было: они — `scripts/runs/g1-upper-learned.sh` на Linux.
 
 | Карточка | Суть |
 |---|---|
@@ -373,9 +373,9 @@ Linux. Обучения и прогона в Gazebo не было: они — `s
 - пакет задачи `examples/plugins/g1_upper_reach` (точка входа `train_tasks`), сценарии `g1_mounted_train.yaml` и
   `g1_mounted.yaml`;
 - пакет G1: `LEGS`, `UPPER_BODY`, верх тела в адаптере, мосте и двойнике MuJoCo (ADR-0064);
-- `scripts/phase6-gains-check.py` — проверка устойчивости коэффициентов профиля по инерциям описания;
-- `scripts/phase6-probe-urdf.py` — положения тел после сброса и после шагов;
-- `scripts/phase6-stage7.sh` — шаги `env plan mount train check replay coded learned diverge compare`.
+- `scripts/tools/gains-check.py` — проверка устойчивости коэффициентов профиля по инерциям описания;
+- `scripts/tools/isaac-urdf-probe.py` — положения тел после сброса и после шагов;
+- `scripts/runs/g1-upper-learned.sh` — шаги `env plan mount train check replay coded learned diverge compare`.
 
 Ядро не менялось.
 
@@ -404,9 +404,10 @@ Linux. Обучения и прогона в Gazebo не было: они — `s
 **Что пользователь делает на Linux:**
 
 ```bash
-bash scripts/phase6-stage7.sh env plan mount
-bash scripts/phase6-stage7.sh train check replay
-bash scripts/phase6-stage7.sh coded learned diverge compare
+scripts/install.sh install exec train unitree_g1 --accept-nvidia-eula   # один раз
+bash scripts/runs/g1-upper-learned.sh env plan mount
+bash scripts/runs/g1-upper-learned.sh train check replay
+bash scripts/runs/g1-upper-learned.sh coded learned diverge compare
 ```
 
 Если в `mount` таз не на 1.0 м — не обучать и прислать `mount/facts.json`. Порог ADR-0005 на задаче G1 — строка

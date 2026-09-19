@@ -25,45 +25,38 @@
 #          the mission fails and names the task; the platform stops the world
 #
 # Usage:
-#   bash scripts/phase8-stage3.sh                    # all steps
-#   GUI=1 bash scripts/phase8-stage3.sh scene        # with the simulator's window and RViz
-#   GUI=1 REC=1 bash scripts/phase8-stage3.sh scene  # and the screen into docs/media
+#   bash scripts/runs/complex-mission.sh                    # all steps
+#   GUI=1 bash scripts/runs/complex-mission.sh scene        # with the simulator's window and RViz
+#   GUI=1 REC=1 bash scripts/runs/complex-mission.sh scene  # and the screen into docs/media
 #
-# Prerequisites: scripts/phase4-stage7.sh env has been run on this machine (the execution venv,
-# the SDK venv and the bridge's workspace of stage 5 are in place). ffmpeg for REC.
+# Prerequisites (ADR-0071): scripts/install.sh install -- the execution venv, and the G1
+# package's venv and bridge workspace in $STACK_ROOT/unitree_g1; ffmpeg (component base) for REC.
 
 set -uo pipefail
 
-readonly APP="heron"                       # the command name; section 17 rename touches this line
+# shellcheck source=../lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly REPO_ROOT
-readonly EXEC_VENV="$REPO_ROOT/.venv"
-readonly EXEC_PY="$EXEC_VENV/bin/python"
-readonly EXEC_CLI="$EXEC_VENV/bin/$APP"
 readonly SCENARIO="examples/scenarios/complex.yaml"
 readonly BENCH_SCENARIO="examples/scenarios/complex_bench.yaml"
 readonly MISSION="examples/missions/complex.yaml"
 readonly G1_PROFILE="examples/robots/g1_23dof/profile.yaml"
 readonly ARM_PROFILE="examples/robots/arm6.yaml"
 readonly REGISTRY="examples/robots"
-readonly PACKAGE="$REPO_ROOT/examples/plugins/unitree_g1"
-readonly METRICS="$REPO_ROOT/scripts/phase4-stage6-metrics.py"
+readonly METRICS="$REPO_ROOT/scripts/tools/record-metrics.py"
 readonly MEDIA="$REPO_ROOT/docs/media"
-readonly ROS_SETUP="/opt/ros/jazzy/setup.bash"
 # The goals of the mission file: G1's arms forward, the arm back home at the end.
 readonly G1_TARGET="[0,0,0,0,0,0, 0,0,0,0,0,0, 0, -0.5,0.3,0,0.8,0, -0.5,-0.3,0,0.8,0]"
 readonly ARM_HOME="[0,0,0,0,0,0]"
 
 STAGE_ROOT="${STAGE_ROOT:-$HOME/phase8-stage3}"
-STAGE5_ROOT="${STAGE5_ROOT:-$HOME/phase4-stage5}"
-PROBE_ROOT="${PROBE_ROOT:-$HOME/phase4-probe}"
 GUI="${GUI:-0}"
 REC="${REC:-0}"
-readonly STAGE_ROOT STAGE5_ROOT PROBE_ROOT GUI REC
+readonly STAGE_ROOT GUI REC
 readonly PY_DIR="$STAGE_ROOT/py"
-readonly WS="$STAGE5_ROOT/ws"
-readonly VENV_OWN="$PROBE_ROOT/venv-own-lib"
+# The G1 package's environment (examples/plugins/unitree_g1/install.sh).
+readonly WS="$STACK_ROOT/unitree_g1/ws"
+readonly VENV_OWN="$STACK_ROOT/unitree_g1/venv"
 readonly OWN_PY="$VENV_OWN/bin/python"
 readonly OWN_CLI="$VENV_OWN/bin/$APP"
 readonly ALL_STEPS="env reqs scene"
@@ -260,21 +253,22 @@ step_env() {
     info "репозиторий: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'), изменённых файлов $(git -C "$REPO_ROOT" status --short 2>/dev/null | wc -l); GUI=$GUI REC=$REC"
     local ok=1
     [[ -f $ROS_SETUP ]] || { record env отказ "нет $ROS_SETUP"; ok=0; }
-    [[ -f $WS/install/setup.bash ]] || { record env отказ "нет $WS: bash scripts/phase4-stage5.sh env"; ok=0; }
+    [[ -f $WS/install/setup.bash ]] || { record env отказ "нет $WS: scripts/install.sh install unitree_g1"; ok=0; }
     if [[ -x $EXEC_PY ]]; then
-        clean "cd '$REPO_ROOT' && uv sync --extra dev --extra ros2 && uv pip install --python '$EXEC_PY' -e '$PACKAGE'" ||
-            { record env отказ "uv sync или установка пакета G1 не прошли"; ok=0; }
+        # This checkout into the execution venv, the packages with it (ADR-0071).
+        clean "bash '$REPO_ROOT/scripts/install.sh' sync exec" ||
+            { record env отказ "scripts/install.sh sync exec не прошёл"; ok=0; }
     else
-        record env отказ "нет $EXEC_VENV: bash scripts/phase4-stage7.sh env"; ok=0
+        record env отказ "нет $EXEC_VENV: scripts/install.sh install exec"; ok=0
     fi
     if [[ -x $OWN_PY ]] && "$OWN_PY" -c 'import unitree_sdk2py.core.channel' >/dev/null 2>&1; then
-        clean "'$OWN_PY' -m pip install -q --no-cache-dir --no-deps -e '$REPO_ROOT' -e '$PACKAGE'" ||
-            { record env отказ "установка в $VENV_OWN не прошла"; ok=0; }
+        clean "bash '$REPO_ROOT/scripts/install.sh' sync unitree_g1" ||
+            { record env отказ "scripts/install.sh sync unitree_g1 не прошёл"; ok=0; }
         # The G1 process must be free of rclpy (ADR-0022): the command line may not bring it in.
         clean "'$OWN_PY' -c 'import sys, ${APP}.cli.main; sys.exit(\"rclpy\" in sys.modules)'" ||
             { record env отказ "командная строка платформы загружает rclpy в процессе G1"; ok=0; }
     else
-        record env отказ "нет $VENV_OWN с SDK: bash scripts/phase4-probe.sh 0.5"; ok=0
+        record env отказ "нет $VENV_OWN с SDK: scripts/install.sh install unitree_g1"; ok=0
     fi
     clean "cd '$REPO_ROOT' && '$EXEC_PY' examples/robots/g1_23dof/fetch_description.py" > /dev/null ||
         { record env отказ "описания производителя не загрузились"; ok=0; }

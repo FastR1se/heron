@@ -69,8 +69,8 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = (
         needs(
             RequirementKind.PYTHON,
             module,
-            hint=f"пакет ros-<дистрибутив>-{package} (ставит scripts/phase0.sh) и подключённое "
-            f"окружение: source /opt/ros/<дистрибутив>/setup.bash",
+            hint=f"пакет ros-<дистрибутив>-{package} (ставит scripts/install.sh install ros2) и "
+            f"подключённое окружение: source /opt/ros/<дистрибутив>/setup.bash",
         )
         for module, package in names.ADAPTER_PACKAGES.items()
     ),

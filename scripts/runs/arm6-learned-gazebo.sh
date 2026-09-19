@@ -10,8 +10,8 @@
 # between them is that line -- which the script makes by copying the profile, not by editing
 # the repository's.
 #
-# Built on the rule of scripts/phase4-stage5.sh: a confirmation is taken by something other
-# than the thing under test. Motion is judged from the recorded run (ADR-0038), not from what
+# Built on the rule of phase 4: a confirmation is taken by something other than the thing
+# under test. Motion is judged from the recorded run (ADR-0038), not from what
 # the skill says about itself; the refusals are counted by code, not by wording; nothing stops
 # at the first failure.
 #
@@ -23,29 +23,23 @@
 #   compare  tracking, steady-state error and time to goal, from the two records
 #
 # Usage:
-#   bash scripts/phase6-stage5.sh                     # all steps, in order
-#   bash scripts/phase6-stage5.sh env coded           # selected steps
-#   GUI=1 bash scripts/phase6-stage5.sh learned       # with the simulator's window
-#   REF=arm6_reach@0123456789abcdef bash scripts/phase6-stage5.sh
+#   bash scripts/runs/arm6-learned-gazebo.sh                     # all steps, in order
+#   bash scripts/runs/arm6-learned-gazebo.sh env coded           # selected steps
+#   GUI=1 bash scripts/runs/arm6-learned-gazebo.sh learned       # with the simulator's window
+#   REF=arm6_reach@0123456789abcdef bash scripts/runs/arm6-learned-gazebo.sh
 #
-# Prerequisites: scripts/phase0.sh (ROS 2 Jazzy, Gazebo, the execution venv); a finished
-# scripts/phase6-stage4.sh, whose store this script reads.
+# Prerequisites: scripts/install.sh install (ROS 2 Jazzy, Gazebo, the execution venv, ADR-0071);
+# a finished scripts/runs/arm6-train.sh, whose store this script reads.
 
 set -uo pipefail
 
-readonly APP="heron"                       # the command name; section 17 rename touches this line
-ENV_PREFIX="${APP^^}"                      # variables the platform reads, built from the name
-readonly ENV_PREFIX
+# shellcheck source=../lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly REPO_ROOT
-readonly EXEC_VENV="$REPO_ROOT/.venv"
-readonly EXEC_PY="$EXEC_VENV/bin/python"
-readonly EXEC_CLI="$EXEC_VENV/bin/$APP"
 readonly SCENARIO="$REPO_ROOT/examples/scenarios/table.yaml"
 readonly PROFILE="$REPO_ROOT/examples/robots/arm6.yaml"
 readonly REGISTRY="$REPO_ROOT/examples/robots"
-readonly ROS_SETUP="/opt/ros/jazzy/setup.bash"
+readonly METRICS="$REPO_ROOT/scripts/tools/record-metrics.py"
 readonly ROBOT_ID="arm1"                   # table.yaml, robots[0].id
 
 STAGE4_ROOT="${STAGE4_ROOT:-$HOME/phase6-stage4}"
@@ -173,7 +167,7 @@ step_env() {
     commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
 
     if [[ -z $REF ]]; then
-        record "артефакт" отказ "ссылка не задана: REF=... или завершите scripts/phase6-stage4.sh"
+        record "артефакт" отказ "ссылка не задана: REF=... или завершите scripts/runs/arm6-train.sh"
         return
     fi
     if clean "$EXEC_CLI policy check $REF $PROFILE --store $STORE" \
@@ -334,7 +328,7 @@ step_compare() {
     # Read by the metrics tool of phase 4, which reads a record with the mcap library
     # rather than with the platform's own reader: the record is the platform's claim
     # about a run, and a claim is not checked by the thing that made it.
-    local out="$STAGE_ROOT/compare.md" metrics="$REPO_ROOT/scripts/phase4-stage6-metrics.py"
+    local out="$STAGE_ROOT/compare.md" metrics="$METRICS"
     local files=()
     local label
     for label in coded learned; do

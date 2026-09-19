@@ -42,6 +42,6 @@ heron train run examples/scenarios/g1_mounted_train.yaml --registry examples/rob
 
 ## Обучение и исполнение
 
-`scripts/phase6-stage7.sh` на Linux: высота таза в Isaac до обучения, обучение с порогом ADR-0005
+`scripts/runs/g1-upper-learned.sh` на Linux: высота таза в Isaac до обучения, обучение с порогом ADR-0005
 снаружи процесса, экспорт, сверка артефакта в окружении исполнения, прогон в Gazebo через мост
 навыком кодом и обученным (одна строка профиля) с записью, сравнение по записям.

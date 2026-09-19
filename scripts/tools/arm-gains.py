@@ -17,7 +17,7 @@ A heavier configuration is only more stable; its damping ratio falls as sqrt(I_m
 Coupling between joints, gravity and contact are outside this criterion and are what a run
 measures, not what this script claims.
 
-Usage: python scripts/phase6-arm6-gains.py [profile]   (default examples/robots/arm6.yaml)
+Usage: python scripts/tools/arm-gains.py [profile]   (default examples/robots/arm6.yaml)
 """
 
 from __future__ import annotations
