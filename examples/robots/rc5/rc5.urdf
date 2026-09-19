@@ -1,0 +1,124 @@
+<?xml version="1.0"?>
+<!--
+  Описание кинематики «Робопро» RC5. Написано человеком (ADR-0055) — вход платформы,
+  а не её выход (ADR-0009): генераторы его не порождают и не переписывают.
+
+  КИНЕМАТИЧЕСКОЕ. Звенья без <inertial> и без мешей: масс и инерций звеньев у
+  производителя нет (паспорт называет только 27 кг целиком, факт 0.18), а выдуманные
+  числа выглядели бы как данные (ADR-0055, п. 2). У <limit> нет effort: момента в
+  документации нет. URDF по спецификации его требует, и симулятор это описание не
+  загрузит — оно не для симулятора, двойника у RC5 в фазе нет.
+
+  Откуда каждое число:
+
+  * Геометрия — таблица DH модели RC5 из API 1.4.1, DhParamsManager._RC5_DH_PARAMS
+    (факт 0.34), цифры как напечатаны там (π/2 — 1.570796):
+        alpha = ( 1.570796, 0, 0, 1.570796, -1.570796, 0 )   рад
+        a     = ( 0, -0.405, -0.3722, 0, 0, 0 )               м
+        d     = ( 0.1725, 0.156, -0.1485, 0.1398, 0.1398, 0.1398 )  м
+        theta = offset = 0
+    Это «идеальные» параметры МОДЕЛИ, а не калибровка тела: get_robot_info отдаёт ту
+    же таблицу по имени модели.
+
+  * СОГЛАШЕНИЕ DH — ПРЕДПОЛОЖЕНИЕ. Ни код, ни руководство его не называют; по форме
+    таблицы (как у серии UR) принято классическое (дистальное):
+        T_i = Rz(q_i) · Tz(d_i) · Tx(a_i) · Rx(alpha_i),
+    и ноль угла сустава совпадает с нулём контроллера. Проверяется на роботе, а не
+    выбирается: проба пишет пары act_q / act_flange_x, и прямая кинематика этого
+    файла сравнивается с позой фланца, которую считает контроллер
+    (python -m robopro_rc.kinematics, ADR-0055, п. 4). До этой сверки — ни одного
+    движения из платформы.
+
+    Как таблица стала суставами: сустав i вращает кадр i−1 вокруг его оси z
+    (origin — ноль), а постоянная часть строки i, Tz(d_i)·Tx(a_i)·Rx(alpha_i) =
+    сдвиг (a_i, 0, d_i) и поворот rpy (alpha_i, 0, 0), стоит в origin следующего
+    сустава; строка 6 — в неподвижном суставе к звену flange. Совпадение с
+    классической DH держит тест пакета (test_rc_kinematics.py) до 1e-9.
+
+  * Пределы позиции и скорости — паспорт RC5, руководство по вводу в эксплуатацию,
+    4.1.2 (факт 0.18): оси 1, 2, 4, 5, 6 — ±360° = ±6.283185307 рад, ось 3 — ±165° =
+    ±2.879793266 рад; все 180 °/с = 3.141592654 рад/с. Рамка профиля уже этих
+    (ADR-0055, п. 5).
+
+  * Звено world и неподвижный сустав к base_link — ADR-0048: база закрепляется
+    описанием, платформа не закрепляет.
+-->
+<robot name="rc5">
+
+  <link name="world"/>
+  <link name="base_link"/>
+  <link name="link1"/>
+  <link name="link2"/>
+  <link name="link3"/>
+  <link name="link4"/>
+  <link name="link5"/>
+  <link name="link6"/>
+  <link name="flange"/>
+
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307" upper="6.283185307" velocity="3.141592654"/>
+  </joint>
+
+  <!-- строка 1: a = 0, d = 0.1725, alpha = π/2 -->
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0 0 0.1725" rpy="1.570796 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307" upper="6.283185307" velocity="3.141592654"/>
+  </joint>
+
+  <!-- строка 2: a = −0.405, d = 0.156, alpha = 0 -->
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="-0.405 0 0.156" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.879793266" upper="2.879793266" velocity="3.141592654"/>
+  </joint>
+
+  <!-- строка 3: a = −0.3722, d = −0.1485, alpha = 0 -->
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="-0.3722 0 -0.1485" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307" upper="6.283185307" velocity="3.141592654"/>
+  </joint>
+
+  <!-- строка 4: a = 0, d = 0.1398, alpha = π/2 -->
+  <joint name="joint5" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0 0 0.1398" rpy="1.570796 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307" upper="6.283185307" velocity="3.141592654"/>
+  </joint>
+
+  <!-- строка 5: a = 0, d = 0.1398, alpha = −π/2 -->
+  <joint name="joint6" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="0 0 0.1398" rpy="-1.570796 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307" upper="6.283185307" velocity="3.141592654"/>
+  </joint>
+
+  <!-- строка 6: a = 0, d = 0.1398, alpha = 0 — фланец без инструмента, кадр act_flange_x -->
+  <joint name="flange_joint" type="fixed">
+    <parent link="link6"/>
+    <child link="flange"/>
+    <origin xyz="0 0 0.1398" rpy="0 0 0"/>
+  </joint>
+
+</robot>

@@ -1,0 +1,18 @@
+# RC5 командного класса в мире из чисел (ADR-0049, ADR-0051). Та же миссия идёт на
+# железо целью, а не другим сценарием — и только с явной шкалой скорости (ADR-0052):
+#   run rc5_bench.yaml --registry examples/robots --target real --speed-scale 0.1
+# На стенде цель задаёт человек, видящий робота: -g "target=[...]" (scripts/phase5-stage4.sh).
+schema_version: 1
+name: rc5_bench
+
+world:
+  backend: dummy
+
+robots:
+  - {id: arm1, profile: rc5, pose: [0.0, 0.0, 0.0], role: scripted}
+
+task:
+  skill: goto_joints
+  # Поза из примера производителя cycle_movement.py (API 1.4.1), градусы, как в контракте.
+  target: [0.0, -115.0, 120.0, -100.0, -90.0, 0.0]
+  tolerance: 0.5
