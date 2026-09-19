@@ -127,7 +127,7 @@ class Recorder(Protocol):
 
 
 class Cancellation:
-    """A request from outside the loop to end the skill that is running (ADR-P8E).
+    """A request from outside the loop to end the skill that is running (ADR-0069).
 
     Checked at the start of every tick and answered the way the watchdog is: the
     robot is stopped first, then the skill ends with the reason. Asking twice keeps
@@ -249,7 +249,7 @@ class Executor:
 
         ``cancel`` is how someone outside the loop -- a coordinator whose mission
         failed elsewhere -- ends the skill: at the next tick, robot stopped first
-        (ADR-P8E).
+        (ADR-0069).
         """
         label = name if name is not None else _name_of(skill)
         report = check_runnable(skill, self.profile, self.adapter)

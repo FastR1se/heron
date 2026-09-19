@@ -180,7 +180,7 @@ def test_a_29_dof_contract_on_a_23_dof_body_names_the_joints_it_lacks() -> None:
         check_body(4, BODY_29DOF)
 
 
-# -- the upper body (ADR-P6B) --------------------------------------------------------
+# -- the upper body (ADR-0064) --------------------------------------------------------
 
 
 ARM_SDK_JOINTS = (

@@ -429,7 +429,7 @@ def test_the_waypoint_counter_wraps_at_sixteen_bits() -> None:
     assert adapter.read_state().motion is MotionPhase.IDLE
 
 
-# -- the stop (ADR-P5A) and the end of the link ------------------------------------------
+# -- the stop (ADR-0061) and the end of the link ------------------------------------------
 
 
 def test_emergency_stop_is_hold_and_refuses_what_follows() -> None:

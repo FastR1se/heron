@@ -1,8 +1,8 @@
-"""The line protocol between the coordinator and a robot's process (ADR-P8D).
+"""The line protocol between the coordinator and a robot's process (ADR-0068).
 
 One JSON object per line, ASCII only, over a TCP connection. What travels is
 decisions and outcomes -- start this task, cancel, it ended so -- never telemetry:
-a robot's states stay with its executor and its record (ADR-P8F).
+a robot's states stay with its executor and its record (ADR-0070).
 
 From a robot: ``hello`` (who it is and which plan it read), then ``ready`` or
 ``refused``, then one ``finished`` per ``start``. From the coordinator: ``welcome``

@@ -86,7 +86,7 @@ UPPER_BODY: Final = frozenset(LAYOUT[12:])
 (``g1_arm7_sdk_dds_example.cpp``, unitree_sdk2 ``9754cd1``) while the robot balances on its own.
 
 Inside a body it is the body without its legs. A contract of exactly that is the one
-subset of a body the package accepts (ADR-P6B): 11 joints of body 4, 17 of body 5, 15 of
+subset of a body the package accepts (ADR-0064): 11 joints of body 4, 17 of body 5, 15 of
 body 6 -- three different sets, so an upper body names its body as a whole body does."""
 
 MACHINES: Final[dict[int, frozenset[str]]] = {
@@ -142,7 +142,7 @@ def is_upper_body(joint_order: Iterable[str]) -> bool:
 def machine_for(joint_order: Iterable[str], *, upper_body: bool = False) -> int | None:
     """The ``mode_machine`` of the body with exactly these joints, if the package knows one.
 
-    With ``upper_body``, the body whose upper body these joints are (ADR-P6B).
+    With ``upper_body``, the body whose upper body these joints are (ADR-0064).
     """
     wanted = frozenset(joint_order)
     for value, body in MACHINES.items():
@@ -163,7 +163,7 @@ def check_body(mode_machine: int, joint_order: Iterable[str], *, upper_body: boo
     Equal sets, not a subset: at the low access level every motor of the body is
     commanded, and a motor the contract does not name would get zero gains and
     hang limp while the rest of the robot moves. The one exception is ``upper_body``
-    (ADR-P6B): the body without its legs, for a robot whose legs hang from a mount --
+    (ADR-0064): the body without its legs, for a robot whose legs hang from a mount --
     the caller has established that, this function only checks which body it is.
     """
     body = MACHINES.get(mode_machine)

@@ -22,7 +22,7 @@ What the SDK does to a process, and what this channel does about it (ADR-0053):
 * ``disconnect`` of the SDK is called on every path out: its two threads are not
   daemons and would keep the process alive.
 
-The real-time packet is read through the SDK's private receiver (ADR-P5B): the
+The real-time packet is read through the SDK's private receiver (ADR-0062): the
 public getters read one field each from separate snapshots, and none of them gives
 the timestamp, the buffer or the waypoint counter.
 """
@@ -73,7 +73,7 @@ def copy_rtd(data: Any) -> RtdReading:
     let the receiving thread run. Conversions come after, on the copy. What remains
     is the writer's side: it is only made to release the GIL mid-packet when it has
     held it for a full switch interval, which a loop of sixty assignments does not
-    unless the operating system stalls it there (ADR-P5B).
+    unless the operating system stalls it there (ADR-0062).
     """
     (
         begin, end, sec, nsec, q, qd, torque, flange, state, safety, mode, fill, counter,
@@ -203,7 +203,7 @@ class SdkChannel:
         if receiver is None or not callable(getattr(receiver, "get_data", None)):
             raise ChannelError(
                 "у RobotApi нет приёмника RTD _rtd_receiver.get_data: канал написан по "
-                "исходнику API 1.4.1, у этой версии устройство другое (ADR-P5B)"
+                "исходнику API 1.4.1, у этой версии устройство другое (ADR-0062)"
             )
         self._receiver = receiver
 

@@ -165,7 +165,7 @@ def _check_profile(
     a scene the adapter would refuse to drive is not worth starting. One more the
     adapter cannot make, because only the twin is shown the description: an upper
     body leaves the legs without torque, which is a mount's condition and a free
-    base's fall (ADR-P6B).
+    base's fall (ADR-0064).
     """
     joints = profile.contract.joint_order
     if not profile.contract.action.has_gains:
@@ -188,12 +188,12 @@ def _check_profile(
     if upper and profile.has_real_adapter:
         raise GeneratorError(
             f"{robot}: контракт профиля {profile.name!r} — верх тела без ног, а профиль объявляет "
-            f"'real'; адаптер откажет при подключении (ADR-P6B)"
+            f"'real'; адаптер откажет при подключении (ADR-0064)"
         )
     if upper and description is not None and not description.fixed_to_world:
         raise GeneratorError(
             f"{robot}: контракт профиля {profile.name!r} — верх тела, ноги мост оставит без "
             f"момента, а описание {description.path.name} базу к миру не крепит: робот упал бы. "
-            f"Верх тела — только на закреплённом описании (ADR-P6A, ADR-P6B)"
+            f"Верх тела — только на закреплённом описании (ADR-0063, ADR-0064)"
         )
     return machine, slots

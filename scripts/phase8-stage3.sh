@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
 # Phase 8, stage 3: one mission, two robots, one Gazebo world (docs/plans/phase8-coordinator.md,
-# "Этап 3"; ADR-P8A - ADR-P8F).
+# "Этап 3"; ADR-0065 - ADR-0070).
 #
 # The scene of phase 4, stage 7 (examples/scenarios/complex.yaml): arm6 through ros2_control and
 # G1 through its vendor's DDS. Phase 4 drove them with two `run` commands in turn; here one
 # `mission run` hands out the tasks of examples/missions/complex.yaml and each robot works in a
 # process of its own. The processes are started separately (`--no-spawn`), each in its own
-# environment, because G1's link and rclpy cannot share one (ADR-0022, ADR-P8D):
+# environment, because G1's link and rclpy cannot share one (ADR-0022, ADR-0068):
 #
 #   coordinator  the execution venv, no ROS 2 sourced;
 #   g1           the venv with the vendor's SDK and CycloneDDS 0.10.2, no ROS 2 sourced;
 #   arm1         the execution venv with ROS 2 sourced.
 #
 # Nobody hands a process the world's environment: every robot process applies the one written
-# in the plan (ADR-0039, ADR-P8D).
+# in the plan (ADR-0039, ADR-0068).
 #
 #   env    the venvs of phase 4, stage 7, with this checkout installed; the bridge's workspace
 #   reqs   mission validate in both worlds; a dry run names the assignment, the world's
@@ -308,7 +308,7 @@ step_reqs() {
     fi
 }
 
-# Start the two robot processes of a run, each in its own environment (ADR-P8D).
+# Start the two robot processes of a run, each in its own environment (ADR-0068).
 start_robots() {  # start_robots <run dir> <log prefix>
     local run="$1" prefix="$2" waited=0
     while [[ ! -f "$run/plan.json" ]] && (( waited < 60 )); do sleep 1; waited=$(( waited + 1 )); done
@@ -407,7 +407,7 @@ step_scene() {
         [[ -s "$run/$task.mcap" ]] && "$EXEC_PY" "$METRICS" run "$run/$task.mcap" --label "mission-$task" --out "$dir/$task-metrics.json" 2>&1 | sed 's/^/      /'
     done
 
-    # -- a failure in the middle (ADR-P8E) ------------------------------------------------
+    # -- a failure in the middle (ADR-0069) ------------------------------------------------
     # G1 moves for 8 s; the arm's goal lies outside its envelope, so its skill refuses it on start.
     cat > "$dir/failing.yaml" <<YAML
 schema_version: 1

@@ -1,4 +1,4 @@
-"""Are a profile's drive gains stable where they are computed? (ADR-0045, item 5; ADR-P6A, item 5)
+"""Are a profile's drive gains stable where they are computed? (ADR-0045, item 5; ADR-0063, item 5)
 
 The law ``tau = kp * (q* - q) - kd * dq`` is computed every ``dt = 1 / state_rate_hz`` and held
 until the next computation, in Isaac (explicit actuator) and in Gazebo (a controller in the

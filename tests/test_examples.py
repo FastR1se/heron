@@ -478,7 +478,7 @@ def test_the_same_mission_goes_to_hardware_by_target(examples_dir: Path, robots:
     assert "шкала     скорости 0.1" in lines
 
 
-# -- phase 6, stage 7: the G1 bolted to a stand (ADR-P6A, ADR-P6B) ---------------------
+# -- phase 6, stage 7: the G1 bolted to a stand (ADR-0063, ADR-0064) ---------------------
 
 MOUNTED = "g1_29dof_lock_waist_rev_1_0_mounted"
 MOUNTED_FETCH = f"python examples/robots/{MOUNTED}/fetch_description.py"
@@ -495,7 +495,7 @@ def _mounted_profile(robots: Path) -> Path:
 
 
 def test_the_mounted_robot_is_the_vendors_description_plus_a_stand(robots: Path) -> None:
-    """ADR-P6A, item 1: exactly three changes to the vendor's file -- a link, a joint, a name."""
+    """ADR-0063, item 1: exactly three changes to the vendor's file -- a link, a joint, a name."""
     from xml.etree import ElementTree as ET
 
     from heron.generators.common import resolve_description
@@ -562,13 +562,13 @@ def test_the_mounted_robot_trains_on_a_fixed_base_at_the_rates_of_its_link(
     assert (spec.dt, spec.decimation) == (pytest.approx(0.002), 10)
     assert (spec.action_size, spec.observation_size) == (15, 60)
     assert spec.action.offset == list(profile.contract.default_pose or [])
-    assert spec.drive.kd[5] == pytest.approx(0.18), "крен запястья — kd ниже I_min/dt (ADR-P6A)"
+    assert spec.drive.kd[5] == pytest.approx(0.18), "крен запястья — kd ниже I_min/dt (ADR-0063)"
 
 
 def test_the_mounted_robot_joins_gazebo_as_an_upper_body_on_the_bridge(
     examples_dir: Path, robots: Path, tmp_path: Path
 ) -> None:
-    """ADR-P6B through the platform's own world: the bridge drives fifteen joints of body 6,
+    """ADR-0064 through the platform's own world: the bridge drives fifteen joints of body 6,
     the legs are read and never commanded, the description carries the stand."""
     from xml.etree import ElementTree as ET
 

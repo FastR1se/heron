@@ -1,4 +1,4 @@
-"""A mission: what a system of robots is to do, as data (ADR-P8A).
+"""A mission: what a system of robots is to do, as data (ADR-0065).
 
 A scenario says what the system is made of; a mission says what it does. The two
 are separate documents on purpose: a mission names no robot by default, only what
@@ -47,17 +47,17 @@ class MissionTask(BaseModel):
     """Passed to the skill untouched; the core does not read it (section 7)."""
 
     required_capabilities: frozenset[Capability] = frozenset()
-    """What the task needs of a robot beyond what its skill declares (ADR-P8A)."""
+    """What the task needs of a robot beyond what its skill declares (ADR-0065)."""
 
     requires: Requirements = Field(default_factory=Requirements)
     """Quantities the task needs beyond the skill's, in the closed registry (ADR-0008)."""
 
     after: tuple[str, ...] | None = None
     """Tasks written above that must succeed first. Unset: the previous task;
-    ``[]``: none (ADR-P8C)."""
+    ``[]``: none (ADR-0067)."""
 
     robot: str | None = None
-    """Narrows the candidates to one robot of the scenario, still checked (ADR-P8B)."""
+    """Narrows the candidates to one robot of the scenario, still checked (ADR-0066)."""
 
     _validate_id = field_validator("id", "skill")(_check_name)
     _validate_robot = field_validator("robot")(_check_optional_name)
@@ -75,7 +75,7 @@ class MissionTask(BaseModel):
 
 
 class Mission(BaseModel):
-    """What a system does: tasks in the order they are written (ADR-P8A, ADR-P8C)."""
+    """What a system does: tasks in the order they are written (ADR-0065, ADR-0067)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -94,7 +94,7 @@ class Mission(BaseModel):
         return self
 
     def waits_for(self, index: int) -> tuple[str, ...]:
-        """The tasks the one at ``index`` waits for, the default resolved (ADR-P8C)."""
+        """The tasks the one at ``index`` waits for, the default resolved (ADR-0067)."""
         task = self.tasks[index]
         if task.after is not None:
             return task.after

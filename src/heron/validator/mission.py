@@ -1,13 +1,13 @@
 """A mission against a scenario: who does each task, decided before anything starts.
 
-ADR-P8B. A robot is a candidate for a task when the comparison ``skill check``
+ADR-0066. A robot is a candidate for a task when the comparison ``skill check``
 makes holds for it -- the skill declared by its profile, capabilities by equality
 of keys, the control class by equality, the quantities of ``requires`` -- and when
 it also meets what the task itself asks for. Exactly one candidate is an
 assignment; none, or more than one, is an error with the reasons named. The
 assignment is static: it is printed before a run and does not change during one.
 
-ADR-P8C. ``after`` names only tasks written above, which is what keeps the order
+ADR-0067. ``after`` names only tasks written above, which is what keeps the order
 free of cycles by construction.
 """
 
@@ -27,7 +27,7 @@ from ..store.policies import ArtifactNotFoundError, PolicyStore
 from .report import Report, error, warning
 from .rules import check_skill_against_profile
 
-ADR = "ADR-P8B"
+ADR = "ADR-0066"
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +189,7 @@ def _check_waits(
                     f"{spot}.after",
                     f"задача ждёт {name!r}, а такой задачи в миссии нет",
                     hint="after называет задачи миссии, записанные выше",
-                    adr="ADR-P8C",
+                    adr="ADR-0067",
                     detail={"after": name},
                 )
             )
@@ -204,7 +204,7 @@ def _check_waits(
                         "ждать можно только задачи выше: так порядок не может замкнуться в "
                         "цикл; переставьте задачи"
                     ),
-                    adr="ADR-P8C",
+                    adr="ADR-0067",
                     detail={"after": name},
                 )
             )

@@ -3,7 +3,7 @@
 The task of ADR-0005, item 1, as far as a world of the platform can hold it: a policy of
 the humanoid's upper body, with balance held by something else. In a simulator that
 something is a mount -- the pelvis bolted to a stand at 1.0 m, the legs hanging without
-torque (ADR-P6A). That is an ideal balance controller, not the robot's own, and the task is
+torque (ADR-0063). That is an ideal balance controller, not the robot's own, and the task is
 trained under that condition and says so.
 
 The goal is a pose of the fifteen joints of the contract, like the goal of
@@ -73,7 +73,7 @@ LEGS: Final = (
     "right_ankle_pitch_joint",
     "right_ankle_roll_joint",
 )
-"""The joints of the description outside the contract. Nothing drives them (ADR-P6A), so
+"""The joints of the description outside the contract. Nothing drives them (ADR-0063), so
 nothing but a reset puts them back: without it, legs set swinging by one episode would
 still swing in the next."""
 
@@ -97,7 +97,7 @@ class G1UpperReachTask:
 
     # Radians, the contract's unit; judged on the worst of fifteen joints (ADR-0043). Looser
     # than the arm's 0.05: the wrists are driven softly (kp 10) because nothing heavier is
-    # stable without a rotor's inertia at 500 Hz (ADR-P6A, item 5). The horizon is the
+    # stable without a rotor's inertia at 500 Hz (ADR-0063, item 5). The horizon is the
     # length of an episode, and one second longer than the coded skill's four.
     completion = Completion(tolerance=0.08, hold_s=0.3, horizon_s=5.0)
 

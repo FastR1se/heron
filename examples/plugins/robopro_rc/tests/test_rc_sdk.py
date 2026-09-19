@@ -3,7 +3,7 @@
 The stand-in is written here, not copied: it has the surface of ``RobotApi`` 1.4.1 the
 channel touches, and does to the process what the source says the real one does --
 ``__init__`` installs its own ``sys.excepthook``. What these tests prove is what the
-channel does with that surface (ADR-0053, ADR-0054, ADR-P5B); that the real SDK
+channel does with that surface (ADR-0053, ADR-0054, ADR-0062); that the real SDK
 behaves like the stand-in is the stand's to show.
 """
 

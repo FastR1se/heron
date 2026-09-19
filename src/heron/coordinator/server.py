@@ -1,4 +1,4 @@
-"""The coordinator's end of every robot's channel (ADR-P8D).
+"""The coordinator's end of every robot's channel (ADR-0068).
 
 Listens on the loopback, lets in the robots the plan names -- each once, and only
 with the plan's identifier -- and turns whatever they say into events on one

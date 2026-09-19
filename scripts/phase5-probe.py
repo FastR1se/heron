@@ -5,7 +5,7 @@ motion command, sets no controller state and changes no setting.
 
 Written first in session 16, before the vendor's source was at hand; rewritten in stage
 3 against API 1.4.1 and the package ``robopro_rc``, whose reading of the real-time
-packet it uses (ADR-P5B), so that the probe exercises on the robot the same copy the
+packet it uses (ADR-0062), so that the probe exercises on the robot the same copy the
 adapter will rely on.
 
 Modes, chosen on the command line:

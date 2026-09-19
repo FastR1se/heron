@@ -1,13 +1,13 @@
 # Фаза 8: комплекс из двух роботов разных классов связи в мире из чисел.
 #
 # arm1 — потоковый манипулятор (arm6), arm2 — командный (rest_arm, ADR-0049). Задачи им раздаёт
-# координатор по миссии examples/missions/mixed_bench.yaml; сама сцена о миссии не знает (ADR-P8A):
+# координатор по миссии examples/missions/mixed_bench.yaml; сама сцена о миссии не знает (ADR-0065):
 #
 #   mission validate examples/scenarios/mixed_bench.yaml examples/missions/mixed_bench.yaml -R examples/robots
 #   mission run      examples/scenarios/mixed_bench.yaml examples/missions/mixed_bench.yaml -R examples/robots
 #
 # Мира поднимать не нужно: dummy — обе стороны своей связи. Каждый робот работает в своём
-# процессе, их запускает координатор (ADR-P8D).
+# процессе, их запускает координатор (ADR-0068).
 schema_version: 1
 name: mixed_bench
 

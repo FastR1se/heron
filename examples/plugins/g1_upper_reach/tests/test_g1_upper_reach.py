@@ -162,7 +162,7 @@ def test_the_legs_it_resets_are_the_joints_outside_the_contract(
 
 
 def test_the_robot_is_mounted_by_its_description(description: Path) -> None:
-    """ADR-P6A: the base is fixed in the input, and the platform derives it from there."""
+    """ADR-0063: the base is fixed in the input, and the platform derives it from there."""
     assert parse_urdf(description).fixed_to_world
 
 

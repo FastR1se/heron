@@ -1,4 +1,4 @@
-"""The plan of a mission run: a file both sides read (ADR-P8D).
+"""The plan of a mission run: a file both sides read (ADR-0068).
 
 Everything the coordinator decided before the run -- which robot does which task,
 through which link, in which world environment, where to report -- is written

@@ -114,7 +114,7 @@ def test_a_contract_of_no_known_body_is_refused() -> None:
 
 
 def test_an_upper_body_is_refused_because_the_vendors_scene_is_free() -> None:
-    """ADR-P6A, item 4: the legs would go limp on a robot nothing holds."""
+    """ADR-0063, item 4: the legs would go limp on a robot nothing holds."""
     with pytest.raises(SimulationError, match="свободной базе"):
         G1MujocoTwin().processes(scene(profile=profile_upper_body()))
 

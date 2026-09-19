@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Phase 5, stage 4: the RC5 on the stand, from safe to risky (docs/plans/phase5-rc5.md,
-# "Этап 4"; ADR-0049..0057, ADR-P5A, ADR-P5B). Every step is its own call, and a human
+# "Этап 4"; ADR-0049..0057, ADR-0061, ADR-0062). Every step is its own call, and a human
 # stands at the emergency button through all of them.
 #
 # Built on the rule of scripts/phase4-stage5.sh: a confirmation is taken by something
@@ -21,7 +21,7 @@
 #   refuse  a target outside the envelope: refused before sending, the robot does not move
 #   move    one joint by MOVE_TARGET (±5° from where it stands) at scale 0.1, recorded
 #   stop    a slow motion to STOP_TARGET, interrupted after STOP_AFTER s: the platform's
-#           stop (ADR-P5A); where the robot stood (0.27)
+#           stop (ADR-0061); where the robot stood (0.27)
 #   task    TASK_TARGET at TASK_SCALE, three times, recorded
 #
 # Usage (the robot's address and archive as variables; targets in degrees, contract order):
@@ -215,7 +215,7 @@ step_move() {
 }
 
 step_stop() {
-    step "stop: останов платформы посреди движения (ADR-P5A, 0.27)"
+    step "stop: останов платформы посреди движения (ADR-0061, 0.27)"
     [[ -n $STOP_TARGET ]] || { record "stop" пропущен "задайте STOP_TARGET"; return; }
     local before after pid
     before="$(pose)"

@@ -89,7 +89,7 @@ def instance(profile: RobotProfile | None = None) -> Instance:
 def description(joints: Sequence[str], *, mounted: bool = False) -> UrdfModel:
     """A chain of revolute joints with these names: all the bridge's block reads.
 
-    ``mounted`` bolts the pelvis to the world, as the mounted G1's description does (ADR-P6A).
+    ``mounted`` bolts the pelvis to the world, as the mounted G1's description does (ADR-0063).
     """
     parts = ['<robot name="g1">', '<link name="pelvis"/>']
     if mounted:
@@ -331,7 +331,7 @@ def test_importing_the_bridge_twin_imports_no_dds_and_no_ros() -> None:
     assert result.stdout.strip() == "[]"
 
 
-# -- the upper body of a mounted robot (ADR-P6B) ---------------------------------
+# -- the upper body of a mounted robot (ADR-0064) ---------------------------------
 
 
 def test_an_upper_body_on_a_mounted_description_is_bridged_as_its_body() -> None:

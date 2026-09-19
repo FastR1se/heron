@@ -2,8 +2,8 @@
 #
 # Phase 6, stage 7: the second implementation of the pipeline -- the mounted G1's upper body,
 # trained in Isaac Lab and executed in Gazebo through the bridge of its package by the same DDS
-# adapter as a coded skill (docs/plans/phase6-learned-skill.md, "Этап 7"; ADR-0040, ADR-P6A,
-# ADR-P6B, ADR-0044, ADR-0046, ADR-0047).
+# adapter as a coded skill (docs/plans/phase6-learned-skill.md, "Этап 7"; ADR-0040, ADR-0063,
+# ADR-0064, ADR-0044, ADR-0046, ADR-0047).
 #
 # Built like scripts/phase6-stage4.sh and phase6-stage5.sh, on the same rule: a claim stands on
 # a confirmation taken by something other than the thing under test. The derivation is read off
@@ -12,7 +12,7 @@
 # the artifact by `policy check` in the execution venv; motion off the run's record (ADR-0038)
 # by the metrics tool of phase 4. Nothing stops at the first failure.
 #
-#   env      versions and machine into conditions.md, with the run condition of ADR-P6A; the
+#   env      versions and machine into conditions.md, with the run condition of ADR-0063; the
 #            mounted description written; the platform and the task in the training venv, the
 #            platform, the G1 package, mcap and onnxruntime in the adapter's venv; rclpy must
 #            NOT import in the training venv (invariant 2)
@@ -62,7 +62,7 @@ readonly ROBOT_DIR="$REPO_ROOT/examples/robots/$ROBOT_NAME"
 readonly PROFILE="$ROBOT_DIR/profile.yaml"
 readonly FETCH="$ROBOT_DIR/fetch_description.py"
 readonly MOUNTED_URDF="$ROBOT_DIR/vendor/mounted/$ROBOT_NAME.urdf"
-readonly MOUNT_HEIGHT="1.0"                # fetch_description.py MOUNT_HEIGHT, ADR-P6A item 1
+readonly MOUNT_HEIGHT="1.0"                # fetch_description.py MOUNT_HEIGHT, ADR-0063 item 1
 readonly REGISTRY="$REPO_ROOT/examples/robots"
 readonly TRAIN_SCENARIO="$REPO_ROOT/examples/scenarios/g1_mounted_train.yaml"
 readonly SCENARIO="$REPO_ROOT/examples/scenarios/g1_mounted.yaml"
@@ -308,7 +308,7 @@ step_env() {
         fi
     fi
     # The execution venv starts the world: the G1 package's Gazebo twin is found there by its
-    # entry point, and it must be this checkout's -- it knows the upper body (ADR-P6B).
+    # entry point, and it must be this checkout's -- it knows the upper body (ADR-0064).
     if clean "cd '$REPO_ROOT' && uv pip install --python '$EXEC_PY' --no-deps -e '$G1_PACKAGE'" \
             > "$STAGE_ROOT/install-exec.log" 2>&1; then
         record "пакет G1 в окружении исполнения" ok "$(version_of "$EXEC_PY" unitree-g1)"
@@ -331,7 +331,7 @@ step_env() {
         echo
         echo "| Что | Значение |"
         echo "|---|---|"
-        echo "| **Условие прогона (ADR-P6A)** | таз закреплён описанием на ${MOUNT_HEIGHT} м, ноги без момента; баланс не моделируется |"
+        echo "| **Условие прогона (ADR-0063)** | таз закреплён описанием на ${MOUNT_HEIGHT} м, ноги без момента; баланс не моделируется |"
         echo "| Робот | $ROBOT_NAME (тело mode_machine 6, верх тела — 15 суставов) |"
         echo "| GPU, драйвер, память | $gpu |"
         echo "| CPU | $cpu |"
@@ -364,7 +364,7 @@ step_plan() {
         sed 's/^/      /' "$STAGE_ROOT/validate-gazebo.txt"
     fi
 
-    # ADR-P6A, item 5: the drive law is stable where it is computed, on the inertias both
+    # ADR-0063, item 5: the drive law is stable where it is computed, on the inertias both
     # worlds actually have -- the description's, without a rotor.
     if clean "'$EXEC_PY' '$GAINS' '$PROFILE'" > "$STAGE_ROOT/gains.txt" 2>&1; then
         record "коэффициенты устойчивы на 500 Гц" ok "см. $STAGE_ROOT/gains.txt"
@@ -422,7 +422,7 @@ step_plan() {
 # no control block) and reads where Isaac put the bodies -- after the reset, and after the
 # legs have hung for MOUNT_STEPS steps.
 step_mount() {
-    step "mount: высота таза в Isaac после сброса и после $MOUNT_STEPS шагов (ADR-P6A, ADR-0048)"
+    step "mount: высота таза в Isaac после сброса и после $MOUNT_STEPS шагов (ADR-0063, ADR-0048)"
     need_train_stack || return
     [[ -x $ISAACLAB_DIR/isaaclab.sh ]] || { record "крепление в Isaac" отказ "нет $ISAACLAB_DIR/isaaclab.sh"; return; }
     [[ -f $MOUNTED_URDF ]] || { record "крепление в Isaac" отказ "нет $MOUNTED_URDF (шаг env)"; return; }
@@ -765,7 +765,7 @@ done
 step "этап 7 фазы 6: ${steps[*]} — лог $LOG"
 info "платформа $(git -C "$REPO_ROOT" rev-parse --short HEAD), $APP; TRAIN_ROOT=$TRAIN_ROOT"
 info "данные прогонов: $RUN_HOME; хранилище артефактов: $STORE; артефакт ${REF:-не задан}"
-info "условие прогона: таз закреплён описанием на ${MOUNT_HEIGHT} м, ноги без момента (ADR-P6A)"
+info "условие прогона: таз закреплён описанием на ${MOUNT_HEIGHT} м, ноги без момента (ADR-0063)"
 for s in "${steps[@]}"; do "step_$s"; done
 
 step "итог"

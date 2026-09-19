@@ -1,4 +1,4 @@
-"""A robot's side of a mission: its executor, driven by the coordinator (ADR-P8D).
+"""A robot's side of a mission: its executor, driven by the coordinator (ADR-0068).
 
 The link to the robot is already up when this starts, and every skill of the
 robot's tasks is already built: what could be refused was refused before ``ready``
@@ -7,7 +7,7 @@ the one executor this link has (ADR-0016), and to say how each ended.
 
 A ``cancel`` is read by a thread of its own while a task runs, and handed to the
 executor as a ``Cancellation``: the robot is stopped at the next tick, then the
-task reports (ADR-P8E). Losing the coordinator is the same cancel -- a robot does
+task reports (ADR-0069). Losing the coordinator is the same cancel -- a robot does
 not keep moving for a mission nobody is watching.
 """
 
@@ -27,7 +27,7 @@ LOST_COORDINATOR = "связь с координатором потеряна"
 
 
 class Recording(Protocol):
-    """What the executor records into for one task, and closes afterwards (ADR-P8F)."""
+    """What the executor records into for one task, and closes afterwards (ADR-0070)."""
 
     def state(self, wall: float, state: Any) -> None: ...
 
@@ -125,7 +125,7 @@ class RobotSide:
         except Exception as exc:
             # A skill refusing its goal on start, an incompatible link, a defect. The
             # executor has stopped the robot if a tick was under way (ADR-0026);
-            # the coordinator is told either way and stops the rest (ADR-P8E).
+            # the coordinator is told either way and stops the rest (ADR-0069).
             error = exc
         except BaseException as exc:  # Ctrl+C reaching this process: recorded, then on
             error = exc

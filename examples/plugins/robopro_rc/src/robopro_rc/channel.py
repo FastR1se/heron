@@ -1,4 +1,4 @@
-"""The link to an RC controller, as values (ADR-0053, ADR-P5B).
+"""The link to an RC controller, as values (ADR-0053, ADR-0062).
 
 The adapter decides everything -- which pose, how fast, whether a command may go at
 all, what phase a motion is in -- and hands a channel a ``Waypoint``; the channel

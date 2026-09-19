@@ -110,7 +110,7 @@ def test_a_joint_outside_the_layout_is_refused_on_connect() -> None:
         G1DdsAdapter(RecordingChannel()).connect(renamed, dict(LINK_PARAMS))
 
 
-# -- the upper body of a mounted robot (ADR-P6B) --------------------------------
+# -- the upper body of a mounted robot (ADR-0064) --------------------------------
 
 
 def test_an_upper_body_connects_to_its_body_and_leaves_the_legs_off() -> None:

@@ -1,4 +1,4 @@
-"""A mission against a scenario: the schema, and who does each task (ADR-P8A - ADR-P8C).
+"""A mission against a scenario: the schema, and who does each task (ADR-0065 - ADR-0067).
 
 Profiles are built in code and written to a temporary registry, as elsewhere in the
 suite, so that deleting ``examples/`` leaves these tests standing (invariant 1).
@@ -90,7 +90,7 @@ def test_a_task_names_a_skill_a_goal_and_what_it_needs() -> None:
 
 
 def test_goal_fields_beside_the_task_are_refused() -> None:
-    """A misspelt key must not become a goal field nobody reads (ADR-P8A)."""
+    """A misspelt key must not become a goal field nobody reads (ADR-0065)."""
     with pytest.raises(LoadError, match="target"):
         mission({"id": "t", "skill": "hold", "target": [0, 0, 0]})
 
@@ -130,7 +130,7 @@ def test_a_mission_file_is_read(tmp_path: Path) -> None:
     assert load_mission(path).tasks[0].id == "t"
 
 
-# -- assignment (ADR-P8B) -------------------------------------------------------------
+# -- assignment (ADR-0066) -------------------------------------------------------------
 
 
 def test_the_only_robot_declaring_a_skill_gets_the_task(registry: Registry, tmp_path: Path) -> None:
@@ -221,7 +221,7 @@ def test_a_policy_absent_here_assigns_with_a_warning(registry: Registry, tmp_pat
     ]
 
 
-# -- order (ADR-P8C) --------------------------------------------------------------------
+# -- order (ADR-0067) --------------------------------------------------------------------
 
 
 def test_a_task_may_wait_only_for_tasks_written_above(registry: Registry, tmp_path: Path) -> None:
@@ -255,7 +255,7 @@ def test_the_mixed_bench_mission_gives_each_class_its_task(examples_dir: Path) -
 def test_one_complex_mission_is_assigned_alike_in_both_worlds(
     examples_dir: Path, scene: str
 ) -> None:
-    """The same mission, a world of numbers or Gazebo: only the scenario differs (ADR-P8A)."""
+    """The same mission, a world of numbers or Gazebo: only the scenario differs (ADR-0065)."""
     registry = Registry([examples_dir / "robots"])
     result = check_mission(
         load_mission(examples_dir / "missions" / "complex.yaml"),
@@ -273,7 +273,7 @@ def test_one_complex_mission_is_assigned_alike_in_both_worlds(
 
 def test_the_complex_missions_goals_are_as_wide_as_their_robots(examples_dir: Path) -> None:
     """``requires.dof`` and the width of ``target`` are one quantity written twice
-    (ADR-P8B): held together here, since the core does not read the goal."""
+    (ADR-0066): held together here, since the core does not read the goal."""
     registry = Registry([examples_dir / "robots"])
     m = load_mission(examples_dir / "missions" / "complex.yaml")
     s = load_scenario(examples_dir / "scenarios" / "complex.yaml")

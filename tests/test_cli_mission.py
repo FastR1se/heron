@@ -1,4 +1,4 @@
-"""``mission``: the commands, and a mission with real robot processes (ADR-P8D).
+"""``mission``: the commands, and a mission with real robot processes (ADR-0068).
 
 The coordinator starts one process per robot, as ``mission run`` does by default:
 the same interpreter, ``python -m`` of the command line, a socket on the loopback.

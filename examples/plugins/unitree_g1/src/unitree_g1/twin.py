@@ -86,7 +86,7 @@ class G1MujocoTwin:
             raise SimulationError(
                 f"{scene.robot}: контракт профиля {scene.profile.name!r} — верх тела без ног, "
                 f"ноги остались бы без момента, а сцена {PROGRAM} держит робота на свободной базе. "
-                f"Закреплённой сцены производителя нет (ADR-P6A, п. 4; ADR-P6B)"
+                f"Закреплённой сцены производителя нет (ADR-0063, п. 4; ADR-0064)"
             )
         wanted = machine_for(joints)
         reported = reported_machine(scene.world)

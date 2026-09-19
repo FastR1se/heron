@@ -74,11 +74,11 @@ def profile_23dof(**overrides: Any) -> RobotProfile:
 JOINTS_UPPER_BODY_6: Final[tuple[str, ...]] = tuple(
     name for name in LAYOUT if name in BODY_29DOF_LOCK_WAIST & UPPER_BODY
 )
-"""The upper body of ``mode_machine`` 6: waist yaw and both arms, 15 joints (ADR-P6B)."""
+"""The upper body of ``mode_machine`` 6: waist yaw and both arms, 15 joints (ADR-0064)."""
 
 
 def profile_upper_body(**overrides: Any) -> RobotProfile:
-    """A mounted G1 driven above the waist: body 6 without its legs, no ``real`` (ADR-P6A)."""
+    """A mounted G1 driven above the waist: body 6 without its legs, no ``real`` (ADR-0063)."""
     joints = list(JOINTS_UPPER_BODY_6)
     dof = len(joints)
     fields: dict[str, Any] = {

@@ -7,7 +7,7 @@ decides it), the bodies left after merging fixed joints, and the limits and driv
 converter took from the URDF. Nothing is set from the profile on purpose -- the question is what
 arrives by default, before the platform says anything.
 
-Phase 6, stage 7 (ADR-P6A) asks one more thing of it: where the bodies are in the world after the
+Phase 6, stage 7 (ADR-0063) asks one more thing of it: where the bodies are in the world after the
 reset and after ``--steps`` physics steps. A description bolted to the world by a ``world`` link
 is converted with ``fix_base``, and whether the importer keeps that joint's origin -- the height
 of the G1's pelvis on its stand -- or fixes the root link where the articulation stands is not in

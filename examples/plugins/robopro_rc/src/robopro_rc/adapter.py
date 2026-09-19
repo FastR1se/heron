@@ -60,7 +60,7 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = (
         "API",
         version=f"=={API_VERSION}",
         because="адаптер написан по исходнику этой версии и читает её закрытый приёмник RTD "
-        "(ADR-P5B); другая версия — другой протокол",
+        "(ADR-0062); другая версия — другой протокол",
         hint="архив API «Робопро» версии 1.4.1 (Python 3.10–3.13): pip install <каталог "
         "архива с pyproject.toml>. Имя дистрибутива и модуля — API",
     ),
@@ -124,7 +124,7 @@ class LinkError(RuntimeError):
 
 
 class StopNotDeliveredError(RuntimeError):
-    """The emergency stop could not be sent (ADR-P5A)."""
+    """The emergency stop could not be sent (ADR-0061)."""
 
 
 class SafetyViolationError(CommandRefusedError):
@@ -304,7 +304,7 @@ class RoboproRcAdapter:
         return self._limits
 
     def emergency_stop(self) -> None:
-        """``hold``: stop where the robot is and drop the buffer, power on (ADR-P5A).
+        """``hold``: stop where the robot is and drop the buffer, power on (ADR-0061).
 
         The adapter counts as stopped before anything is sent, so a stop that cannot
         be sent still refuses what comes after it. A motion in progress stays
@@ -323,7 +323,7 @@ class RoboproRcAdapter:
                 f"hold не доставлен: {exc}"
                 + (
                     f". Связи нет ({lost}): движение ведёт контроллер, адаптеру "
-                    f"останавливать нечем — кнопка у робота (ADR-P5A)"
+                    f"останавливать нечем — кнопка у робота (ADR-0061)"
                     if lost is not None
                     else ""
                 )

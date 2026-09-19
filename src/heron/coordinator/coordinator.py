@@ -1,7 +1,7 @@
-"""The coordinator: hands tasks to robots and watches them end (ADR-P8C, ADR-P8E).
+"""The coordinator: hands tasks to robots and watches them end (ADR-0067, ADR-0069).
 
 It decides nothing the plan has not decided. Which robot does a task was fixed
-before the run (ADR-P8B); what is left is *when*: a task starts once the tasks it
+before the run (ADR-0066); what is left is *when*: a task starts once the tasks it
 waits for have succeeded, its robot is free and that robot's tasks written above
 it are done. The first task that does not succeed stops the system: every running
 task is cancelled -- its executor stops the robot first -- and nothing new starts.
@@ -31,7 +31,7 @@ class TaskState(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    """Stopped by the coordinator because another task failed (ADR-P8E)."""
+    """Stopped by the coordinator because another task failed (ADR-0069)."""
     NOT_STARTED = "not_started"
 
 
@@ -147,7 +147,7 @@ class Coordinator:
 
         Ctrl+C is a stop like a failure: running tasks are cancelled and waited for.
         A second Ctrl+C during that wait goes on as it came -- the robot processes
-        then lose their channel and stop themselves (ADR-P8D).
+        then lose their channel and stop themselves (ADR-0068).
         """
         self._emit("mission_started", robots=list(self._robots), tasks=len(self._tasks))
         try:
@@ -280,7 +280,7 @@ class Coordinator:
         return True
 
     def _halt(self, status: MissionStatus, reason: str) -> None:
-        """Stop the system once: cancel what runs, start nothing more (ADR-P8E)."""
+        """Stop the system once: cancel what runs, start nothing more (ADR-0069)."""
         if self._stop is not None:
             return
         self._stop = (status, reason)

@@ -1,4 +1,4 @@
-"""The coordinator's part of a mission record (ADR-P8F).
+"""The coordinator's part of a mission record (ADR-0070).
 
 Events are appended as they happen, one JSON line each, and flushed: a run cut
 short leaves every event up to the cut. The result is written once, at the end;

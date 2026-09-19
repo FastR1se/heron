@@ -1,6 +1,6 @@
 """``mission`` -- a system of robots doing one mission (phase 8).
 
-Three commands, and the split is the shape of the deployment (ADR-P8D):
+Three commands, and the split is the shape of the deployment (ADR-0068):
 
 * ``validate`` checks a mission against a scenario and prints who does what;
 * ``run`` is the coordinator: it checks, writes the plan, waits for the robots,
@@ -123,7 +123,7 @@ def check(
     store: PolicyStore,
     library: SkillLibrary | None = None,
 ) -> tuple[Report, MissionCheck]:
-    """The scenario as ``validate`` checks it, and the mission against it (ADR-P8B)."""
+    """The scenario as ``validate`` checks it, and the mission against it (ADR-0066)."""
     scenario_report = check_scenario(scenario, registry, path=scenario_path, store=store)
     result = check_mission(mission, scenario, registry, library=library, store=store)
     return scenario_report.merged(result.report), result
@@ -174,7 +174,7 @@ def plan_lines(plan: MissionPlan, run_dir: Path) -> list[str]:
         lines.append(f"окружение {describe_environment(plan.environment)}")
     lines.append(f"прогон    {run_dir}")
     if plan.record:
-        lines.append("запись    MCAP на каждую задачу в каталоге прогона (ADR-P8F)")
+        lines.append("запись    MCAP на каждую задачу в каталоге прогона (ADR-0070)")
     return lines
 
 
@@ -188,7 +188,7 @@ def mission_validate(
     roots: RootsOption = None,
     store: StoreOption = None,
 ) -> None:
-    """Проверить миссию против сцены: кто выполняет каждую задачу (ADR-P8B)."""
+    """Проверить миссию против сцены: кто выполняет каждую задачу (ADR-0066)."""
     scenario, mission = _load(scenario_file, mission_file)
     report, result = check(
         scenario,
@@ -219,13 +219,13 @@ def mission_run(
         bool, typer.Option("--dry-run", help="Показать план и команды, ничего не запуская.")
     ] = False,
     record: Annotated[
-        bool, typer.Option("--record", help="Записать каждую задачу в MCAP (ADR-P8F).")
+        bool, typer.Option("--record", help="Записать каждую задачу в MCAP (ADR-0070).")
     ] = False,
     spawn: Annotated[
         bool,
         typer.Option(
             "--spawn/--no-spawn",
-            help="Запустить процессы роботов самому или ждать запущенных отдельно (ADR-P8D).",
+            help="Запустить процессы роботов самому или ждать запущенных отдельно (ADR-0068).",
         ),
     ] = True,
     roots: RootsOption = None,
@@ -234,7 +234,7 @@ def mission_run(
     """Выполнить миссию комплексом: координатор раздаёт задачи роботам (фаза 8).
 
     Мир поднимается отдельно — ``sim run``. Каждый робот работает в своём процессе;
-    первый отказ останавливает комплекс (ADR-P8E).
+    первый отказ останавливает комплекс (ADR-0069).
     """
     scenario, mission = _load(scenario_file, mission_file)
     registry = Registry(roots or [])
@@ -544,7 +544,7 @@ def mission_robot(
     run_dir: Annotated[Path, typer.Argument(help="Каталог прогона с планом.")],
     robot: Annotated[str, typer.Option("--robot", help="Идентификатор робота в сцене.")],
 ) -> None:
-    """Процесс одного робота миссии: исполнитель, которым управляет координатор (ADR-P8D)."""
+    """Процесс одного робота миссии: исполнитель, которым управляет координатор (ADR-0068)."""
     try:
         plan = MissionPlan.read(run_dir)
     except LoadError as exc:

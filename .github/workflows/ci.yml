@@ -55,7 +55,7 @@ jobs:
       - name: Тесты пакета робота
         run: uv run pytest -v examples/plugins/unitree_g1/tests
 
-      # Фаза 5: адаптер RC на записывающем канале и на заменителе SDK (ADR-0053, ADR-P5B).
+      # Фаза 5: адаптер RC на записывающем канале и на заменителе SDK (ADR-0053, ADR-0062).
       - name: Тесты пакета RC
         run: uv run pytest -v examples/plugins/robopro_rc/tests
 
@@ -129,7 +129,7 @@ jobs:
           fi
 
       # Фаза 8: миссия двух роботов разных классов связи. Координатор раздаёт задачи по
-      # возможностям и сам запускает процесс каждого робота (ADR-P8A – ADR-P8E).
+      # возможностям и сам запускает процесс каждого робота (ADR-0065 – ADR-0069).
       - name: Миссия комплекса на dummy
         run: |
           uv run heron mission validate examples/scenarios/mixed_bench.yaml \
@@ -181,7 +181,7 @@ jobs:
             --skill move_joints -g "target=[0,-0.6,1.2,0,0.9,0]" -g duration=4 --dry-run > run-complex.txt
           cat run-complex.txt
           grep -F "окружение не выводится" run-complex.txt
-          # Фаза 8: та же миссия комплекса — в Gazebo и в мире из чисел (ADR-P8A, ADR-P8B).
+          # Фаза 8: та же миссия комплекса — в Gazebo и в мире из чисел (ADR-0065, ADR-0066).
           uv run heron mission validate examples/scenarios/complex.yaml \
             examples/missions/complex.yaml --registry examples/robots
           uv run heron mission validate examples/scenarios/complex_bench.yaml \

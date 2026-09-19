@@ -1,4 +1,4 @@
-"""The command line as a module: how the platform starts a process of its own (ADR-P8D).
+"""The command line as a module: how the platform starts a process of its own (ADR-0068).
 
 ``python -m`` of this package runs the same commands as the installed script, with
 the interpreter that started it -- so a robot's process is this interpreter and

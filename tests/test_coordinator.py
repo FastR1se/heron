@@ -1,10 +1,10 @@
-"""The coordinator: when tasks start, and what a failure does to the rest (ADR-P8C, ADR-P8E).
+"""The coordinator: when tasks start, and what a failure does to the rest (ADR-0067, ADR-0069).
 
 The scheduler is exercised over scripted robots first -- no threads, no sockets --
 so that each rule is visible in the order of events. Then the real parts: the
 executor's cancellation, and a mission over the line protocol to two robots made
 of numbers, one streaming and one of the command class, each on a thread of its
-own with the socket in between (ADR-P8D).
+own with the socket in between (ADR-0068).
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ def states(result: MissionResult) -> dict[str, TaskState]:
     return {item.task: item.state for item in result.tasks}
 
 
-# -- when a task starts (ADR-P8C) -------------------------------------------------------
+# -- when a task starts (ADR-0067) -------------------------------------------------------
 
 
 def test_tasks_run_one_after_another_unless_written_otherwise() -> None:
@@ -164,7 +164,7 @@ def test_tasks_of_two_robots_that_wait_for_nobody_start_together() -> None:
 
 
 def test_a_robot_takes_its_tasks_in_the_order_written() -> None:
-    """``c`` waits for nobody, but its robot still owes ``a`` (ADR-P8C, p. 3)."""
+    """``c`` waits for nobody, but its robot still owes ``a`` (ADR-0067, p. 3)."""
     the_plan = plan(("a", "r1", ()), ("b", "r2", ()), ("c", "r1", ()))
     _, events = run(the_plan, ScriptedRobots(["r1", "r2"]))
     sequence = order(events)
@@ -186,7 +186,7 @@ def test_nothing_starts_until_every_robot_is_ready() -> None:
     assert set(states(result).values()) == {TaskState.NOT_STARTED}
 
 
-# -- what a failure does (ADR-P8E) --------------------------------------------------------
+# -- what a failure does (ADR-0069) --------------------------------------------------------
 
 
 def test_a_failure_cancels_the_running_and_starts_nothing_more() -> None:
@@ -233,7 +233,7 @@ def test_ctrl_c_stops_the_system_like_a_failure() -> None:
     assert states(result) == {"a": TaskState.CANCELLED, "b": TaskState.NOT_STARTED}
 
 
-# -- the executor's cancellation (ADR-P8E) --------------------------------------------------
+# -- the executor's cancellation (ADR-0069) --------------------------------------------------
 
 
 class CancelledOnTick(HoldSkill):
@@ -272,7 +272,7 @@ def test_a_cancellation_keeps_the_first_reason() -> None:
     assert cancel.reason == "первая"
 
 
-# -- over the line protocol, two robots of two classes (ADR-P8D) ---------------------------
+# -- over the line protocol, two robots of two classes (ADR-0068) ---------------------------
 
 
 def serve_robot(

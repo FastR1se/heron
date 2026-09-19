@@ -367,10 +367,10 @@ class G1DdsAdapter:
 
 
 def _check_upper_body_profile(profile: RobotProfile) -> None:
-    """An upper body over ``rt/lowcmd`` only where no robot can be on the link (ADR-P6B).
+    """An upper body over ``rt/lowcmd`` only where no robot can be on the link (ADR-0064).
 
     The legs of such a contract get ``mode = 0``. A mount holds them in the world this
-    profile describes (ADR-P6A); on a robot standing on the floor at the low level
+    profile describes (ADR-0063); on a robot standing on the floor at the low level
     nobody would, and it would fall. A profile that declares ``real`` says it may meet
     such a robot, and is refused before a channel is opened: on hardware the upper
     body goes through ``rt/arm_sdk`` while the vendor's controller keeps the legs.
@@ -380,7 +380,7 @@ def _check_upper_body_profile(profile: RobotProfile) -> None:
             f"{profile.name}: контракт — верх тела G1 без ног, а профиль объявляет адаптер "
             f"'real'. По rt/lowcmd ноги получили бы mode = 0, и стоящий робот упал бы; верх "
             f"тела на железе идёт по rt/arm_sdk при работающем балансе (фаза 7). Верх тела "
-            f"по rt/lowcmd — только у закреплённого робота в симуляции (ADR-P6B)"
+            f"по rt/lowcmd — только у закреплённого робота в симуляции (ADR-0064)"
         )
 
 

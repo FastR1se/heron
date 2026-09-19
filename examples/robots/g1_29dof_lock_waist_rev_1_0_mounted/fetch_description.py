@@ -1,4 +1,4 @@
-"""Fetch the G1 with its waist locked from its vendor, and write it down mounted (ADR-P6A).
+"""Fetch the G1 with its waist locked from its vendor, and write it down mounted (ADR-0063).
 
 Two inputs, one written from the other. The first is the vendor's: the URDF the vendor's
 table names for ``mode_machine`` 6 (ADR-0059), fetched at a pinned commit exactly as
@@ -17,7 +17,7 @@ as the download is. Both files stay out of the repository: they are the vendor's
 
 The mount stands in for the balance controller the robot has and no world of the platform
 does: an ideal one, infinitely stiff. That is the condition of every run of this profile,
-and ADR-P6A says what it costs.
+and ADR-0063 says what it costs.
 
 Usage::
 
@@ -50,7 +50,7 @@ clear of the floor and never touch it; Isaac Lab mounts its fixed-base G1
 
 MOUNT: Final = (
     "\n"
-    "  <!-- Mounted: the pelvis bolted to a stand (ADR-P6A). Written by\n"
+    "  <!-- Mounted: the pelvis bolted to a stand (ADR-0063). Written by\n"
     "       examples/robots/g1_29dof_lock_waist_rev_1_0_mounted/fetch_description.py;\n"
     "       everything else in this file is the vendor's. -->\n"
     '  <link name="world"/>\n'
