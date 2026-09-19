@@ -1,0 +1,48 @@
+# Миссия фазы 8 для комплекса: манипулятор и G1 в одном мире (complex.yaml в Gazebo,
+# complex_bench.yaml в мире из чисел).
+#
+# Оба робота объявляют hold и move_joints с arm.joint_position, так что по навыку их не различить.
+# Задачу отличает то, что нужно её цели: поза из 6 суставов или из 23. Это и написано в requires —
+# величина dof из закрытого реестра (ADR-0008). Координатор находит единственного робота, которому
+# она подходит (ADR-P8B). Ширина target — та же величина второй раз: ядро цель не читает, а их
+# расхождение навык называет на старте задачи.
+#
+# Порядок (ADR-P8C):
+#   arm_aside  манипулятор отводит руку;
+#   g1_arms    потом G1 поднимает руки (ждёт arm_aside — предыдущую);
+#   arm_hold   одновременно с g1_arms манипулятор держит позу (after: [arm_aside]);
+#   arm_home   когда обе окончены, манипулятор возвращается в ноль.
+#
+# Цели — те же, что в complex.yaml фазы 4 (table.yaml и humanoid.yaml). G1 падает до первой
+# команды (ADR-0018): проверяется, что суставы идут к цели.
+schema_version: 1
+name: complex
+
+tasks:
+  - id: arm_aside
+    skill: move_joints
+    requires: {dof: "==6"}
+    goal: {target: [0.0, -0.6, 1.2, 0.0, 0.9, 0.0], duration: 4.0}
+
+  - id: g1_arms
+    skill: move_joints
+    requires: {dof: "==23"}
+    goal:
+      target: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+               0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+               0.0,
+               -0.5, 0.3, 0.0, 0.8, 0.0,
+               -0.5, -0.3, 0.0, 0.8, 0.0]
+      duration: 4.0
+
+  - id: arm_hold
+    skill: hold
+    requires: {dof: "==6"}
+    after: [arm_aside]
+    goal: {duration: 4.0}
+
+  - id: arm_home
+    skill: move_joints
+    requires: {dof: "==6"}
+    after: [g1_arms, arm_hold]
+    goal: {target: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], duration: 4.0}

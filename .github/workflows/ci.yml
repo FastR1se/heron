@@ -128,6 +128,16 @@ jobs:
             echo "прогон на железе спланирован без шкалы скорости"; exit 1
           fi
 
+      # Фаза 8: миссия двух роботов разных классов связи. Координатор раздаёт задачи по
+      # возможностям и сам запускает процесс каждого робота (ADR-P8A – ADR-P8E).
+      - name: Миссия комплекса на dummy
+        run: |
+          uv run heron mission validate examples/scenarios/mixed_bench.yaml \
+            examples/missions/mixed_bench.yaml --registry examples/robots
+          uv run heron mission run examples/scenarios/mixed_bench.yaml \
+            examples/missions/mixed_bench.yaml --registry examples/robots --into generated/mission
+          grep -F '"status": "success"' generated/mission/result.json
+
       # ADR-0025: проверка окружения — про машину, а не про данные. Сцене на
       # заглушке не нужно ничего; сцене в Gazebo здесь не хватает ROS 2, и
       # команда обязана это назвать, а не пройти.
@@ -171,6 +181,13 @@ jobs:
             --skill move_joints -g "target=[0,-0.6,1.2,0,0.9,0]" -g duration=4 --dry-run > run-complex.txt
           cat run-complex.txt
           grep -F "окружение не выводится" run-complex.txt
+          # Фаза 8: та же миссия комплекса — в Gazebo и в мире из чисел (ADR-P8A, ADR-P8B).
+          uv run heron mission validate examples/scenarios/complex.yaml \
+            examples/missions/complex.yaml --registry examples/robots
+          uv run heron mission validate examples/scenarios/complex_bench.yaml \
+            examples/missions/complex.yaml --registry examples/robots
+          uv run heron mission run examples/scenarios/complex.yaml examples/missions/complex.yaml \
+            --registry examples/robots --into generated/mission-complex --no-spawn --dry-run
 
       # Фаза 4, этап 4: мир MuJoCo — двойник производителя (ADR-0030). Без пакета робота
       # сцена проверяется (MJCF, сцена, шаг), а мир не строится — двойника некому поставить.

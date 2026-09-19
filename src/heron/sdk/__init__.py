@@ -1,6 +1,7 @@
 """Public API for missions and skills."""
 
 from .executor import (
+    Cancellation,
     Clock,
     Executor,
     ManualClock,
@@ -14,6 +15,7 @@ from .runner import AdapterContext, IncompatibleSkillError, check_runnable
 
 __all__ = [
     "AdapterContext",
+    "Cancellation",
     "Clock",
     "Executor",
     "IncompatibleSkillError",

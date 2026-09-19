@@ -1,0 +1,28 @@
+# Миссия фазы 8 для сцены mixed_bench: два робота разных классов связи.
+#
+# Роботов миссия не называет (ADR-P8A). Кому достаётся задача, решает координатор до запуска:
+# навык должен быть объявлен в профиле робота и сопоставлен с ним так же, как в skill check
+# (ADR-P8B). move_joints и hold объявляет только потоковый arm6, goto_joints — только командный
+# rest_arm, поэтому у каждой задачи ровно один исполнитель.
+#
+# Порядок читается сверху вниз (ADR-P8C): без after задача ждёт предыдущую. rest_ready ждёт
+# никого (after: []) и идёт одновременно с arm_ready; arm_hold ждёт обе.
+#
+# Цели — в единицах и порядке контракта своего робота: радианы у arm6, градусы у rest_arm.
+schema_version: 1
+name: mixed_bench
+
+tasks:
+  - id: arm_ready
+    skill: move_joints
+    goal: {target: [0.0, -0.4, 0.8, 0.0, 0.6, 0.0], duration: 1.0}
+
+  - id: rest_ready
+    skill: goto_joints
+    after: []
+    goal: {target: [10.0, -5.0, 5.0, 0.0], tolerance: 0.5}
+
+  - id: arm_hold
+    skill: hold
+    after: [arm_ready, rest_ready]
+    goal: {duration: 0.5}

@@ -27,6 +27,7 @@ and not about the world.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -125,6 +126,30 @@ class Recorder(Protocol):
     def command(self, wall: float, world: float, command: Command) -> None: ...
 
 
+class Cancellation:
+    """A request from outside the loop to end the skill that is running (ADR-P8E).
+
+    Checked at the start of every tick and answered the way the watchdog is: the
+    robot is stopped first, then the skill ends with the reason. Asking twice keeps
+    the first reason -- it is the one a human has to see. Safe to request from
+    another thread: a coordinator's channel is read by one.
+    """
+
+    def __init__(self) -> None:
+        self._reason: str | None = None
+        self._lock = threading.Lock()
+
+    def request(self, reason: str) -> None:
+        with self._lock:
+            if self._reason is None:
+                self._reason = reason
+
+    @property
+    def reason(self) -> str | None:
+        """Why the skill is to end, or ``None`` while nobody asked."""
+        return self._reason
+
+
 @dataclass(frozen=True, slots=True)
 class RunResult:
     """What one task did."""
@@ -184,14 +209,14 @@ class Executor:
 
     # -- running ------------------------------------------------------------
 
-    def run_task(self, task: Task) -> RunResult:
+    def run_task(self, task: Task, *, cancel: Cancellation | None = None) -> RunResult:
         """One task: the skill as this robot's profile binds it, run against its goal.
 
         Code or a policy -- the profile's ``skills`` says which, and nothing here asks
         (invariant 4, ADR-0046). A skill the profile does not declare is refused.
         """
         skill = self.library.create_for(self.profile, task.skill, store=self.store)
-        return self.run(skill, task.goal, name=task.skill)  # type: ignore[arg-type]
+        return self.run(skill, task.goal, name=task.skill, cancel=cancel)  # type: ignore[arg-type]
 
     def run_tasks(self, tasks: Sequence[Task]) -> list[RunResult]:
         """Tasks in order, stopping at the first one that does not succeed.
@@ -214,12 +239,17 @@ class Executor:
         *,
         name: str | None = None,
         max_ticks: int = MAX_TICKS,
+        cancel: Cancellation | None = None,
     ) -> RunResult:
         """Run one skill to a terminal status.
 
         The compatibility check happens before the first tick, not during it:
         a skill the robot cannot run is a validator error, not a failure
         discovered halfway through a motion (invariant 6).
+
+        ``cancel`` is how someone outside the loop -- a coordinator whose mission
+        failed elsewhere -- ends the skill: at the next tick, robot stopped first
+        (ADR-P8E).
         """
         label = name if name is not None else _name_of(skill)
         report = check_runnable(skill, self.profile, self.adapter)
@@ -238,6 +268,8 @@ class Executor:
         last_stamp: float | None = None
 
         for tick in range(1, max_ticks + 1):
+            if cancel is not None and (why := cancel.reason) is not None:
+                return self._halt(skill, label, tick, seen, ctx, f"отменено: {why}")
             started = self.clock.now()
             state = self.adapter.read_state()
             read_at = self.clock.now()

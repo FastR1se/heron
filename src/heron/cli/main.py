@@ -43,6 +43,7 @@ from ..validator.environment import LocalMachine, check_environment, check_requi
 from ..validator.policy import check_policy_against_profile
 from ..validator.report import Report
 from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
+from .mission import mission_app
 from .new_robot import write_stub
 from .new_task import write_stub as write_task_stub
 from .run import RunError, describe, execute
@@ -79,6 +80,7 @@ app.add_typer(sim_app, name="sim")
 app.add_typer(train_app, name="train")
 app.add_typer(task_app, name="task")
 app.add_typer(env_app, name="env")
+app.add_typer(mission_app, name="mission")
 
 RootsOption = Annotated[
     list[Path] | None,
