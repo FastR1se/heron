@@ -71,22 +71,30 @@ BODY_23DOF: Final = BODY_29DOF - {
 """Slots 13, 14, 20, 21, 27 and 28 empty: "INVALID for g1 23dof" in the vendor's
 examples, dummy bodies twenty metres above the world in the twin's MJCF."""
 
-BODY_27DOF: Final = BODY_29DOF - {
+BODY_29DOF_LOCK_WAIST: Final = BODY_29DOF - {
     "waist_roll_joint",
     "waist_pitch_joint",
 }
-"""Slots 13, 14 empty: waist roll/pitch absent; both wrists full (pitch+yaw)."""
+"""The 29-DoF body with its waist locked: roll and pitch are fixed joints of its
+description, slots 13 and 14 empty, both wrists whole."""
 
-MACHINES: Final[dict[int, frozenset[str]]] = {4: BODY_23DOF, 5: BODY_29DOF, 6: BODY_27DOF}
+MACHINES: Final[dict[int, frozenset[str]]] = {
+    4: BODY_23DOF,
+    5: BODY_29DOF,
+    6: BODY_29DOF_LOCK_WAIST,
+}
 """The body behind each ``mode_machine`` a robot reports.
 
-Taken from the vendor's C++ twin, which reports 4 for a scene whose file name
-contains "23" and 5 otherwise. What the hardware reports is not visible in any
-source; a value missing here refuses the connection with the number, and is
-added as a fact when it is one (phase 7), not guessed.
+Read off the vendor's table of descriptions -- the README of ``robots/g1_description``
+in ``unitree_ros``, at the commit the profiles fetch -- which names the description
+of each value: 4 ``g1_23dof_rev_1_0``, 5 ``g1_29dof_rev_1_0``, 6
+``g1_29dof_lock_waist_rev_1_0``. Each body is the set of movable joints of that
+description, and a test holds the two together. The vendor's C++ twin agrees on the
+two it can load: 4 for a scene whose file name contains "23", 5 otherwise.
 
-mode_machine = 6: 27-DoF hardware variant (both wrists full, waist yaw only),
-discovered empirically on physical robot (journal 2026-09-18, session 25)."""
+The table names more values than this: earlier revisions and bodies with other
+motors. A value missing here refuses the connection with its number, and joins
+from the table when a robot reports it -- 6 did (journal 2026-09-18)."""
 
 
 class SlotError(RuntimeError):

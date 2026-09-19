@@ -12,6 +12,7 @@ import subprocess
 import sys
 import types
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 
 import pytest
 from unitree_g1.channel import (
@@ -185,3 +186,51 @@ def test_the_real_channel_refuses_a_process_with_rclpy(monkeypatch: pytest.Monke
 def test_without_cyclonedds_the_real_channel_says_what_is_missing() -> None:
     with pytest.raises(ChannelError, match="cyclonedds"):
         CycloneChannel(LinkConfig(domain=1, interface="lo"))
+
+
+# -- waiting, as CycloneDDS 0.10.2 waits ---------------------------------------
+
+
+class SilentReader:
+    """A reader of 0.10.2 on a topic where nothing arrives.
+
+    ``take_one`` there is ``next(take_iter(...))``, and the iterator ends once its wait
+    expires: the caller sees ``StopIteration``, not the ``TimeoutError`` the method's
+    docstring names (cyclonedds/sub.py, 0.10.2). The wait itself is recorded.
+    """
+
+    def __init__(self) -> None:
+        self.waits: list[float] = []
+
+    def take(self, **_: object) -> list[object]:
+        return []
+
+    def take_one(self, timeout: float) -> object:
+        def iterate() -> Iterator[object]:
+            self.waits.append(timeout)
+            yield from ()
+
+        return next(iterate())
+
+
+def reading_half(reader: SilentReader) -> CycloneChannel:
+    """The real channel's reading half over a stand-in reader: its constructor opens
+    a DDS domain, and what is checked here is only how ``poll`` waits."""
+    channel = CycloneChannel.__new__(CycloneChannel)
+    channel._reader = reader
+    channel._invalid = type("InvalidSample", (), {})
+    channel._duration = lambda seconds: seconds
+    return channel
+
+
+def test_nothing_within_the_timeout_is_no_reading_and_not_an_error() -> None:
+    reader = SilentReader()
+    assert reading_half(reader).poll(0.1) is None
+    assert reader.waits == [0.1]
+
+
+def test_a_zero_timeout_does_not_wait() -> None:
+    """0.10.2 turns a zero wait into an unbounded one; "do not wait" must not reach it."""
+    reader = SilentReader()
+    assert reading_half(reader).poll(0.0) is None
+    assert reader.waits == []

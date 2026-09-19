@@ -1,17 +1,16 @@
-"""Fetch the descriptions of the G1 27-DoF humanoid from its vendor.
+"""Fetch the description of the G1 with its waist locked from its vendor.
 
-A description is an input of the platform, not an output (ADR-0009), and these
-are not ours to copy into the repository: tens of megabytes of meshes, under the
+A description is an input of the platform, not an output (ADR-0009), and this one
+is not ours to copy into the repository: tens of megabytes of meshes, under the
 vendor's licence, versioned by the vendor. What the repository keeps instead is
-where each input comes from -- a repository, a commit and a directory -- so that
+where the input comes from -- a repository, a commit and a directory -- so that
 the file every validator run compares against is the same file on every machine.
 
-Two inputs, one robot. The URDF from ``unitree_ros`` is what Gazebo is started
-from; the MJCF from ``unitree_mujoco`` is what the vendor's MuJoCo twin loads
-(ADR-0023), together with the scene that includes it. They are fetched from the
-twin's own repository at the twin's own commit, not from ``unitree_ros``, which
-ships a file of the same name with a different actuator order (journal
-2026-09-14).
+One input: the URDF the vendor's table names for ``mode_machine`` 6 (ADR-0059), what
+Gazebo is started from. There is no MJCF to fetch. The vendor's MuJoCo twin loads a
+23- or a 29-DoF scene and reports 4 or 5; a twin for this body does not exist, and
+``unitree_ros``'s own MJCF of it declares its actuators in a row rather than in slot
+order (journal 2026-09-14), which no twin reads.
 
 Commits are pinned rather than following a branch. A description that moves
 under a profile is exactly the drift the validator exists to catch, and a moving
@@ -22,7 +21,7 @@ overwritten: somebody put it there, and replacing it would hide that.
 
 Usage::
 
-    python examples/robots/g1_27dof/fetch_description.py
+    python examples/robots/g1_29dof_lock_waist_rev_1_0/fetch_description.py
 """
 
 from __future__ import annotations
@@ -52,21 +51,14 @@ class Source:
         return VENDOR / self.repository.rsplit("/", 1)[-1].removesuffix(".git")
 
 
-# NOTE: Vendor does not ship a 27-DoF variant (mode_machine=6 has full wrists like
-# 29-DoF but missing waist roll/pitch). We fetch 29-DoF files; validator will
-# report diffs for the two absent waist joints (expected per ADR-0009).
 SOURCES: Final = (
     Source(
         repository="https://github.com/unitreerobotics/unitree_ros.git",
+        # master on 2026-08-28, the commit of g1_23dof and of the table that names
+        # this description. Changing it is a change of input: run the validator.
         commit="7d6075f7f58588b189b940130e3edab3c839b2df",
         subdir="robots/g1_description",
-        files=("g1_29dof_lock_waist.urdf",),
-    ),
-    Source(
-        repository="https://github.com/unitreerobotics/unitree_mujoco.git",
-        commit="1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d",
-        subdir="unitree_robots/g1",
-        files=("g1_29dof.xml", "scene_29dof.xml"),
+        files=("g1_29dof_lock_waist_rev_1_0.urdf", "README.md"),
     ),
 )
 
@@ -106,6 +98,8 @@ def fetch(source: Source) -> int:
     if not (target / ".git").is_dir():
         git("init", "--quiet", cwd=target)
         git("remote", "add", "origin", source.repository, cwd=target)
+    # Only the one robot's directory, and only the one commit: the repository
+    # holds every robot the vendor makes, and none of the others is an input.
     git("sparse-checkout", "set", source.subdir, cwd=target)
     git("fetch", "--quiet", "--depth", "1", "--filter=blob:none", "origin", source.commit,
         cwd=target)

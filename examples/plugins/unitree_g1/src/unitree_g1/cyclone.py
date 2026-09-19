@@ -102,10 +102,16 @@ class CycloneChannel:
 
     def poll(self, timeout: float) -> LowStateReading | None:
         newest = self._drain()
-        if newest is None:
+        # 0.10.2 reads a zero wait as no deadline at all (``timeout or duration(weeks=
+        # 99999)`` in ``take_iter``): "do not wait" never reaches it.
+        if newest is None and timeout > 0:
             try:
-                sample = self._reader.take_one(timeout=self._duration(seconds=max(timeout, 0.0)))
-            except (TimeoutError, StopIteration):
+                sample = self._reader.take_one(timeout=self._duration(seconds=timeout))
+            except StopIteration:
+                # How 0.10.2 says "nothing within the timeout": ``take_one`` is
+                # ``next(take_iter(...))``, and the iterator ends once its wait expires.
+                # The ``TimeoutError`` it documents is raised for a ``None`` sample,
+                # which the iterator never yields (cyclonedds/sub.py, 0.10.2).
                 return None
             if not isinstance(sample, self._invalid):
                 newest = sample

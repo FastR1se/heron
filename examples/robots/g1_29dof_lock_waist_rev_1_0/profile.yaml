@@ -1,19 +1,24 @@
-# G1 27-DoF variant: both wrists full (pitch+yaw), waist yaw only.
-# Discovered empirically on physical robot reporting mode_machine = 6.
-# See journal 2026-09-18, session 25.
+# G1 с закреплённой талией: 29 приводов по раскладке, из них подвижны 27 — у талии
+# только рыскание, запястья полные. Такой робот сообщает mode_machine = 6; таблица
+# описаний производителя (README g1_description в unitree_ros) называет для этого
+# значения описание g1_29dof_lock_waist_rev_1_0 — по нему профиль и назван (ADR-0059).
+# Тип машины виден и в приложении производителя: Device → Data → Robot → Machine Type.
 #
 # Описание кинематики — вход от производителя (ADR-0009). Загружается скриптом:
 #
-#     python examples/robots/g1_27dof/fetch_description.py
+#     python examples/robots/g1_29dof_lock_waist_rev_1_0/fetch_description.py
+#
+# Второго описания (MJCF) и мира MuJoCo нет: двойник производителя загружает сцену на
+# 23 или 29 степеней свободы и сообщает 4 или 5 — тело из 27 суставов связь с ним
+# отвергла бы при connect (ADR-0027). Здесь работают dummy, Gazebo и железо.
 #
 # База свободна, встроенный контроллер отключён (low): равновесие не держит никто.
 # Условие прогона — urdf.free_base_uncontrolled (ADR-0018).
 schema_version: 1
-name: g1_27dof
+name: g1_29dof_lock_waist_rev_1_0
 
 description:
-  urdf: vendor/unitree_ros/robots/g1_description/g1_29dof_lock_waist.urdf
-  mjcf: vendor/unitree_mujoco/unitree_robots/g1/g1_29dof.xml
+  urdf: vendor/unitree_ros/robots/g1_description/g1_29dof_lock_waist_rev_1_0.urdf
 
 contract:
   revision: 1
@@ -102,10 +107,7 @@ adapters:
     plugin: dummy
   sim.gazebo:
     plugin: unitree_g1_dds
-    params: &local_link {domain: 1, interface: lo, peers: [127.0.0.1]}
-  sim.mujoco:
-    plugin: unitree_g1_dds
-    params: *local_link
+    params: {domain: 1, interface: lo, peers: [127.0.0.1]}
   real:
     plugin: unitree_g1_dds
     params: {domain: 0, interface: wlp2s0}

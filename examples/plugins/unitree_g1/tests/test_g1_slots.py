@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -10,7 +11,9 @@ import yaml
 from unitree_g1.slots import (
     BODY_23DOF,
     BODY_29DOF,
+    BODY_29DOF_LOCK_WAIST,
     LAYOUT,
+    MACHINES,
     SLOT_COUNT,
     BodyMismatchError,
     SlotError,
@@ -26,7 +29,19 @@ ROBOT = EXAMPLES / "robots" / "g1_23dof"
 DESCRIPTIONS = ROBOT / "vendor" / "unitree_ros" / "robots" / "g1_description"
 TWIN_MJCF = ROBOT / "vendor" / "unitree_mujoco" / "unitree_robots" / "g1" / "g1_23dof.xml"
 PROFILE = ROBOT / "profile.yaml"
+LOCK_WAIST_PROFILE = EXAMPLES / "robots" / "g1_29dof_lock_waist_rev_1_0" / "profile.yaml"
 NOT_FETCHED = "описание G1 не загружено: python examples/robots/g1_23dof/fetch_description.py"
+
+TABLE_ROW = re.compile(r"^\|\s*`(?P<file>[^`]+)`\s*\|\s*(?P<machine>\d+)\s*\|", re.MULTILINE)
+"""A current row of the vendor's table: file name, then ``mode_machine``. A deprecated
+row is struck through (``~~`name`~~``) and does not match."""
+
+MACHINE_DESCRIPTIONS = {
+    4: "g1_23dof_rev_1_0",
+    5: "g1_29dof_rev_1_0",
+    6: "g1_29dof_lock_waist_rev_1_0",
+}
+"""The description the vendor's table names for each value the package knows."""
 
 
 def actuated_joints(mjcf: Path) -> list[str]:
@@ -105,9 +120,43 @@ def test_the_example_profile_is_the_23_dof_body() -> None:
     assert frozenset(order) == BODY_23DOF
 
 
+def test_the_example_locked_waist_profile_is_its_body() -> None:
+    if not LOCK_WAIST_PROFILE.is_file():
+        pytest.skip("профиля G1 с закреплённой талией в examples нет")
+    order = yaml.safe_load(LOCK_WAIST_PROFILE.read_text(encoding="utf-8"))["contract"][
+        "joint_order"
+    ]
+    check_body(6, order)
+
+
 def test_each_known_body_accepts_its_own_joints() -> None:
     check_body(4, BODY_23DOF)
     check_body(5, BODY_29DOF)
+    check_body(6, BODY_29DOF_LOCK_WAIST)
+
+
+def movable_joints(urdf: Path) -> frozenset[str]:
+    return frozenset(
+        joint.attrib["name"]
+        for joint in ET.parse(urdf).getroot().iter("joint")
+        if joint.attrib.get("type") in {"revolute", "continuous", "prismatic"}
+    )
+
+
+def test_each_mode_machine_is_the_body_of_the_description_the_vendor_names_for_it() -> None:
+    """The vendor's table of descriptions is where the value is stated (ADR-0059)."""
+    readme = DESCRIPTIONS / "README.md"
+    if not readme.is_file():
+        pytest.skip(NOT_FETCHED)
+    table = {
+        row["file"]: int(row["machine"])
+        for row in TABLE_ROW.finditer(readme.read_text(encoding="utf-8"))
+    }
+
+    assert set(MACHINE_DESCRIPTIONS) == set(MACHINES)
+    for machine, description in MACHINE_DESCRIPTIONS.items():
+        assert table[description] == machine, description
+        assert movable_joints(DESCRIPTIONS / f"{description}.urdf") == MACHINES[machine]
 
 
 def test_a_body_the_package_does_not_know_is_refused_with_its_number() -> None:
