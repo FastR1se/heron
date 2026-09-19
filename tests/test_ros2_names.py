@@ -18,7 +18,7 @@ from heron.core.contract import ActionSpec, ObservationTerm
 from heron.core.enums import ActionType, ControlMode, ObservationType
 from heron.generators import ros2_control as generator
 from heron.ros2 import names
-from heron.ros2.transport import MESSAGE_FIELDS, message_class_path
+from heron.ros2.transport import GOAL_FIELDS, MESSAGE_FIELDS, message_class_path
 
 # -- what the names are ----------------------------------------------------
 
@@ -49,12 +49,33 @@ def test_topics_sit_under_the_scenario_identifier() -> None:
     )
 
 
-def test_trajectory_controller_listens_on_its_own_topic() -> None:
+def test_a_command_class_robot_takes_goals_through_the_controllers_action() -> None:
+    """The topic takes a trajectory and never says whether it was taken or when it
+    ended; the action says both (ADR-0060)."""
     profile = make_profile(control_mode=ControlMode.COMMAND)
-    assert names.command_topic("arm1", profile) == (
-        "/arm1/joint_trajectory_controller/joint_trajectory"
+    assert names.command_action("arm1", profile) == (
+        "/arm1/joint_trajectory_controller/follow_joint_trajectory"
     )
-    assert names.command_message(profile) == names.TRAJECTORY_MESSAGE
+    assert names.command_action_type(profile) == names.TRAJECTORY_ACTION_TYPE
+    assert names.command_topic("arm1", profile) is None
+    assert names.command_message(profile) is None
+    plane = names.control_plane("arm1", profile)
+    assert plane["command_action"] == names.command_action("arm1", profile)
+
+
+def test_a_stream_has_no_action() -> None:
+    profile = make_profile()
+    assert names.command_action("arm1", profile) is None
+    assert names.command_action_type(profile) is None
+
+
+def test_the_command_class_reads_the_velocity_it_needs_to_see_a_stop() -> None:
+    """A goal is reached once the joints have stopped (stopped_velocity_tolerance)."""
+    profile = make_profile(
+        control_mode=ControlMode.COMMAND,
+        contract=make_contract(3, observation=[ObservationTerm(type=ObservationType.JOINT_POS)]),
+    )
+    assert names.state_interfaces(profile) == ["position", "velocity"]
 
 
 def test_no_namespace_means_the_root_and_not_a_guess() -> None:
@@ -132,6 +153,15 @@ def test_every_message_the_plane_can_ask_for_can_be_built() -> None:
 def test_every_buildable_message_belongs_to_the_plane() -> None:
     """The other side: no conversion code for a message nobody sends."""
     assert set(MESSAGE_FIELDS) <= names.MESSAGES
+
+
+def test_every_action_the_plane_can_use_has_a_goal_the_transport_builds() -> None:
+    """The rule above, for goals: from both sides."""
+    assert set(GOAL_FIELDS) == names.ACTIONS
+    for action_type in names.ACTIONS:
+        module, class_name = message_class_path(action_type)
+        assert module.endswith(".action")
+        assert class_name[:1].isupper()
 
 
 @pytest.mark.parametrize("message_type", sorted(names.MESSAGES))

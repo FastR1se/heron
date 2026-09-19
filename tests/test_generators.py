@@ -17,15 +17,17 @@ import yaml
 
 from conftest import make_contract, make_profile, urdf_text, write_profile, write_urdf
 from heron.core.contract import ActionSpec, ObservationTerm
-from heron.core.enums import ActionType, ControlMode, ObservationType, Role
+from heron.core.enums import ActionType, AngleUnit, ControlMode, ObservationType, Role
 from heron.core.models import AdapterSpec, JointRange, Limits, Scenario
 from heron.generators import GeneratorError, build, scenario_for_profile
 from heron.generators.common import Instance, resolve_description
 from heron.generators.ros2_control import (
+    SPAWNER_TIMEOUT,
     command_interface,
     controller_type,
     controllers_config,
     merged_description,
+    spawner,
     state_interfaces,
 )
 from heron.generators.world import physics_step
@@ -698,6 +700,41 @@ def test_an_observed_effort_is_published_and_not_handed_to_the_trajectory_contro
     assert state_interfaces(profile) == ["position", "velocity", "effort"]
     assert '<state_interface name="effort"' in generated
     assert controller["state_interfaces"] == ["position", "velocity"]
+
+
+def test_a_spawner_waits_for_the_switch_as_long_as_for_the_manager() -> None:
+    """Both wait for the world to have started; the spawner's own default for the
+    switch is 5 s, which a slow first start of a simulation outlasts (ADR-0060)."""
+    arguments = list(spawner(names.TRAJECTORY_CONTROLLER_NAME).arguments)
+    timeout = arguments[arguments.index("--controller-manager-timeout") + 1]
+    assert arguments[arguments.index("--switch-timeout") + 1] == timeout == SPAWNER_TIMEOUT
+
+
+def test_a_command_class_robot_gets_a_trajectory_controller_that_sees_a_stop(
+    tmp_path: Path,
+) -> None:
+    """Position commanded, position and velocity read: the goal is reached once the
+    joints have stopped, which the controller can only see reading velocity."""
+    profile = _profile(
+        tmp_path,
+        control_mode=ControlMode.COMMAND,
+        contract=make_contract(
+            dof=3, observation=[ObservationTerm(type=ObservationType.JOINT_POS)]
+        ),
+    )
+    document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
+    controller = document["/arm1/joint_trajectory_controller"]["ros__parameters"]
+
+    assert controller["command_interfaces"] == ["position"]
+    assert controller["state_interfaces"] == ["position", "velocity"]
+    assert "interpolation_method" not in controller
+
+
+def test_a_scene_in_degrees_is_not_built_for_ros2_control(tmp_path: Path) -> None:
+    """The link talks radians and does not convert; the scene would be driven 57 times off."""
+    profile = _profile(tmp_path, contract=make_contract(dof=3, angle_unit=AngleUnit.DEG))
+    with pytest.raises(GeneratorError, match="радианах"):
+        merged_description(_instance(tmp_path, profile), tmp_path / "out")
 
 
 def test_an_effort_interface_is_not_bounded_by_angles(tmp_path: Path) -> None:

@@ -23,8 +23,8 @@ from heron.adapters.dummy import (
     MotionInProgressError,
     NotConnectedError,
     SafetyViolationError,
-    Trapezoid,
 )
+from heron.adapters.motion import Trapezoid
 from heron.adapters.ros2_control import Ros2ControlAdapter
 from heron.core.capabilities import Capability
 from heron.core.enums import ActionType, MotionPhase
@@ -32,7 +32,7 @@ from heron.core.models import JointMax, Limits, RobotProfile
 from heron.core.protocols import ControlAdapter
 from heron.core.types import Command
 from heron.ros2 import names
-from heron.ros2.transport import RecordingTransport
+from heron.ros2.transport import GoalStatus, RecordingTransport
 from heron.testing.adapter_contract import AdapterContract, Harness
 
 STATES = 32
@@ -81,6 +81,39 @@ class TestDummyCommandAdapter(AdapterContract):
 class TestRos2ControlAdapter(AdapterContract):
     harness = Harness(
         plugin="ros2_control", make=_over_topics, profile=make_profile, prime=_prime_topics
+    )
+
+
+def _over_an_action() -> ControlAdapter:
+    """A ros2_control adapter whose trajectory controller serves its action (ADR-0060)."""
+    action = names.command_action("", make_command_profile())
+    assert action is not None
+    return Ros2ControlAdapter(RecordingTransport(servers={action}))
+
+
+def _goal_over(adapter: Any, profile: RobotProfile) -> None:
+    """The controller reports the goal reached, and a state follows."""
+    transport = adapter.transport
+    assert isinstance(transport, RecordingTransport)
+    action = names.command_action("", profile)
+    assert action is not None
+    transport.settle(action, GoalStatus.SUCCEEDED)
+    transport.deliver_state(
+        names.state_topic(""),
+        stamp=STATES / profile.contract.state_rate_hz,
+        names_=list(profile.contract.joint_order),
+        position=[0.0] * profile.contract.dof,
+        velocity=[0.0] * profile.contract.dof,
+    )
+
+
+class TestRos2ControlCommandAdapter(AdapterContract):
+    harness = Harness(
+        plugin="ros2_control",
+        make=_over_an_action,
+        profile=make_command_profile,
+        prime=_prime_topics,
+        finish=_goal_over,
     )
 
 

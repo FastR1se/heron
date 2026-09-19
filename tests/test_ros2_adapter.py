@@ -13,21 +13,31 @@ import time
 
 import pytest
 
-from conftest import make_contract, make_profile
+from conftest import make_command_profile, make_contract, make_profile
+from heron.adapters.motion import plan
 from heron.adapters.ros2_control import (
+    MOTION_ENDED,
+    GoalRefusedError,
+    LinkConfigurationError,
+    MotionInProgressError,
     NotConnectedError,
     Ros2ControlAdapter,
     SafetyViolationError,
     StateMismatchError,
     UnsupportedActionError,
-    UnsupportedControlModeError,
 )
 from heron.core.contract import ActionSpec
-from heron.core.enums import ActionType, ControlMode
+from heron.core.enums import ActionType, AngleUnit, ControlMode, MotionPhase
 from heron.core.models import RobotProfile
 from heron.core.types import Command
 from heron.ros2 import names
-from heron.ros2.transport import Publication, Reading, RecordingTransport, TransportError
+from heron.ros2.transport import (
+    GoalStatus,
+    Publication,
+    Reading,
+    RecordingTransport,
+    TransportError,
+)
 
 JOINTS = ["joint0", "joint1", "joint2"]
 
@@ -237,21 +247,192 @@ def test_position_command_becomes_a_float_array_on_the_controller_topic() -> Non
     ]
 
 
-def test_a_robot_of_the_command_class_is_refused_before_anything_is_wired() -> None:
-    """ADR-0058: the link has no phase, no envelope-bound motion and no refusal during
-    one (ADR-0049), so it does not drive a profile that promises them."""
-    transport = RecordingTransport()
-    adapter = Ros2ControlAdapter(transport)
-
-    with pytest.raises(UnsupportedControlModeError, match="control_mode: streaming"):
-        adapter.connect(make_profile(control_mode=ControlMode.COMMAND), {"namespace": "arm1"})
-    assert not transport.subscribed
-    assert not transport.advertised
-
-
-def test_the_link_reports_its_own_class_not_the_profiles() -> None:
+def test_a_stream_reports_no_motion_phase() -> None:
     adapter, _ = connected()
     assert adapter.control_mode() is ControlMode.STREAMING
+    assert adapter.read_state().motion is None
+
+
+# -- the command class, through the trajectory controller's action (ADR-0060) ----
+
+ACTION = "/arm1/joint_trajectory_controller/follow_joint_trajectory"
+
+
+def commanded(
+    *, server: bool = True, answer: GoalStatus = GoalStatus.ACCEPTED, **config: object
+) -> tuple[Ros2ControlAdapter, RecordingTransport, RobotProfile]:
+    """A command-class link at rest in the zero pose, its first state read."""
+    profile = make_command_profile()
+    transport = RecordingTransport(servers={ACTION} if server else set(), answer=answer)
+    adapter = Ros2ControlAdapter(transport)
+    adapter.connect(profile, {"namespace": "arm1", "link_timeout": 0.05, **config})
+    deliver(transport, profile, stamp=0.0)
+    assert adapter.read_state().motion is MotionPhase.IDLE
+    return adapter, transport, profile
+
+
+def deliver(transport: RecordingTransport, profile: RobotProfile, stamp: float) -> None:
+    transport.deliver_state(
+        names.state_topic("arm1"),
+        stamp=stamp,
+        names_=list(profile.contract.joint_order),
+        position=[0.0] * profile.contract.dof,
+        velocity=[0.0] * profile.contract.dof,
+    )
+
+
+def goal_of(position: float = 1.0) -> Command:
+    return Command(type=ActionType.JOINT_POSITION, values=(position, 0.0, 0.0))
+
+
+def test_a_command_class_link_sends_goals_and_publishes_nothing() -> None:
+    adapter, transport, _ = commanded()
+    assert transport.actions == {ACTION: names.TRAJECTORY_ACTION_TYPE}
+    assert not transport.advertised
+    assert adapter.control_mode() is ControlMode.COMMAND
+    assert adapter.topics == {"state": "/arm1/joint_states", "action": ACTION}
+
+
+def test_the_goal_is_the_planned_motion_sampled_at_the_state_rate() -> None:
+    """The planner of dummy, at the rate the controller manager updates (ADR-0060)."""
+    adapter, transport, profile = commanded()
+    adapter.send_command(goal_of(1.0))
+
+    (goal,) = transport.goals
+    assert goal.action == ACTION
+    trajectory = goal.fields["trajectory"]
+    assert trajectory["joint_names"] == list(profile.contract.joint_order)
+    points = trajectory["points"]
+    motion = plan(0.0, (0.0,) * 3, (1.0, 0.0, 0.0), (1.0,) * 3, (2.0,) * 3, 1.0)
+    period = 1 / profile.contract.state_rate_hz
+    assert [point["time_from_start"] for point in points[:2]] == pytest.approx([period, 2 * period])
+    assert points[-1]["time_from_start"] == pytest.approx(motion.duration)
+    assert points[-1]["positions"] == pytest.approx([1.0, 0.0, 0.0])
+    assert points[-1]["velocities"] == pytest.approx([0.0, 0.0, 0.0])
+    times = [point["time_from_start"] for point in points]
+    assert times == sorted(times) and len(set(times)) == len(times), "время точек растёт строго"
+
+
+def test_the_run_scale_stretches_the_motion_by_its_inverse() -> None:
+    """``s·v`` and ``s²·a``: the same motion in ``1/s`` the time (ADR-0057)."""
+    full, full_link, _ = commanded()
+    full.send_command(goal_of(1.0))
+    slow, slow_link, _ = commanded(speed_scale=0.5)
+    slow.send_command(goal_of(1.0))
+
+    end = full_link.goals[0].fields["trajectory"]["points"][-1]["time_from_start"]
+    slow_end = slow_link.goals[0].fields["trajectory"]["points"][-1]["time_from_start"]
+    assert slow_end == pytest.approx(2 * end, abs=1 / 20)
+
+
+def test_the_phase_holds_until_the_goal_is_over_and_a_later_state_arrives() -> None:
+    adapter, transport, profile = commanded()
+    adapter.send_command(goal_of(1.0))
+
+    assert adapter.read_state().motion is MotionPhase.MOVING, "показание устарело — фаза прежняя"
+    deliver(transport, profile, stamp=0.05)
+    assert adapter.read_state().motion is MotionPhase.MOVING
+
+    transport.settle(ACTION, GoalStatus.SUCCEEDED)
+    assert adapter.read_state().motion is MotionPhase.MOVING, "нового состояния после конца нет"
+    deliver(transport, profile, stamp=0.10)
+    state = adapter.read_state()
+    assert state.motion is MotionPhase.IDLE
+    assert state.extra[MOTION_ENDED] == "succeeded"
+
+
+def test_an_aborted_goal_ends_the_motion_and_says_why() -> None:
+    """Over is not arrived: the skill decides arrival by the pose (ADR-0049)."""
+    adapter, transport, profile = commanded()
+    adapter.send_command(goal_of(1.0))
+    transport.settle(ACTION, GoalStatus.ABORTED, "-4 Aborted due to path tolerance violation")
+    deliver(transport, profile, stamp=0.05)
+
+    state = adapter.read_state()
+    assert state.motion is MotionPhase.IDLE
+    assert state.extra[MOTION_ENDED] == "aborted: -4 Aborted due to path tolerance violation"
+
+
+def test_a_second_command_during_a_motion_is_refused_and_later_accepted() -> None:
+    adapter, transport, profile = commanded()
+    adapter.send_command(goal_of(1.0))
+    with pytest.raises(MotionInProgressError):
+        adapter.send_command(goal_of(0.5))
+
+    transport.settle(ACTION, GoalStatus.SUCCEEDED)
+    deliver(transport, profile, stamp=0.05)
+    adapter.read_state()
+    adapter.send_command(goal_of(0.5))
+    assert len(transport.goals) == 2
+
+
+def test_a_goal_the_controller_rejects_is_a_refused_command() -> None:
+    """An inactive controller rejects every goal (goal_received_callback): nothing moves."""
+    adapter, _, _ = commanded(answer=GoalStatus.REJECTED)
+    with pytest.raises(GoalRefusedError, match="не принял цель"):
+        adapter.send_command(goal_of(1.0))
+    assert adapter.read_state().motion is MotionPhase.IDLE
+
+
+def test_a_goal_not_answered_within_a_period_is_latched() -> None:
+    adapter, transport, profile = commanded(answer=GoalStatus.PENDING)
+    adapter.send_command(goal_of(1.0))
+    assert adapter.read_state().motion is MotionPhase.MOVING
+
+    transport.settle(ACTION, GoalStatus.REJECTED, "rejected")
+    deliver(transport, profile, stamp=0.05)
+    assert adapter.read_state().motion is MotionPhase.IDLE
+
+
+def test_without_a_server_the_first_goal_waits_out_the_link_deadline_and_is_refused() -> None:
+    adapter, transport, _ = commanded(server=False)
+    with pytest.raises(GoalRefusedError, match="сервера действия нет"):
+        adapter.send_command(goal_of(1.0))
+    assert not transport.goals
+
+
+def test_disconnect_cancels_an_unfinished_motion() -> None:
+    adapter, transport, _ = commanded()
+    adapter.send_command(goal_of(1.0))
+    adapter.disconnect()
+    assert transport.cancelled == [ACTION]
+
+
+def test_emergency_stop_cancels_the_goal_and_refuses_what_follows() -> None:
+    """On cancel the controller holds where the joints are (goal_cancelled_callback)."""
+    adapter, transport, _ = commanded()
+    adapter.send_command(goal_of(1.0))
+    adapter.emergency_stop()
+
+    assert transport.cancelled == [ACTION]
+    assert transport.goal_status(ACTION).status is GoalStatus.CANCELED
+    with pytest.raises(SafetyViolationError):
+        adapter.send_command(goal_of(0.5))
+
+
+@pytest.mark.parametrize("missing", ["joint_velocity", "joint_acceleration"])
+def test_a_command_class_link_without_motion_bounds_refuses_to_connect(missing: str) -> None:
+    limits = make_command_profile().limits.model_copy(update={missing: None})
+    with pytest.raises(LinkConfigurationError, match=missing):
+        Ros2ControlAdapter(RecordingTransport()).connect(
+            make_command_profile(limits=limits), {"namespace": "arm1"}
+        )
+
+
+def test_a_stream_is_not_slowed_by_the_link() -> None:
+    with pytest.raises(LinkConfigurationError, match="потоковую связь"):
+        Ros2ControlAdapter(RecordingTransport()).connect(
+            make_profile(), {"namespace": "arm1", "speed_scale": 0.5}
+        )
+
+
+def test_a_contract_in_degrees_is_refused_not_sent_57_times_off() -> None:
+    """ROS 2 measures angles in radians; the link does not know which joints are angles."""
+    profile = make_profile(contract=make_contract(angle_unit=AngleUnit.DEG))
+    transport = RecordingTransport()
+    with pytest.raises(LinkConfigurationError, match="радианах"):
+        Ros2ControlAdapter(transport).connect(profile, {"namespace": "arm1"})
+    assert not transport.subscribed
 
 
 def test_gains_send_the_point_at_once_and_ask_for_no_speed() -> None:

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__
-from ..core.enums import Role, Status
+from ..core.enums import ControlMode, Role, Status
 from ..core.loading import LoadError
 from ..core.models import (
     REAL_TARGET,
@@ -176,6 +176,20 @@ def choose_speed_scale(target: str, wanted: float | None) -> float:
     return wanted
 
 
+def refuse_scale_on_a_stream(profile: RobotProfile, scale: float) -> None:
+    """A stream is planned by its skill or policy, and no link slows it (ADR-0052).
+
+    Known from the profile alone, so refused before any adapter is looked at -- in a
+    dry run too -- rather than by each adapter on ``connect``.
+    """
+    if scale != 1 and profile.control_mode is ControlMode.STREAMING:
+        raise RunError(
+            f"{profile.name}: робот потокового класса, а прогон просит шкалу скорости "
+            f"{scale:g}. Поток планирует навык или политика, связь его не замедлит "
+            f"(ADR-0052): шкала — 1, замедляйте длительностью навыка"
+        )
+
+
 def refuse_undeclared_scale(plugin: str, factory: Any, scale: float) -> bool:
     """Whether the adapter executes the scale; refused when it is not 1 and it does not."""
     declared = getattr(factory, "supports_speed_scale", None)
@@ -266,6 +280,9 @@ def plan(
     if plane is not None and plane.get("command_topic") is not None:
         lines.append(f"состояние {plane['state_topic']}  ({plane['state_message']})")
         lines.append(f"команды   {plane['command_topic']}  ({plane['command_message']})")
+    elif plane is not None and plane.get("command_action") is not None:
+        lines.append(f"состояние {plane['state_topic']}  ({plane['state_message']})")
+        lines.append(f"цели      {plane['command_action']}  ({plane['command_action_type']})")
     return lines
 
 
@@ -366,6 +383,7 @@ def execute(
         if not envelope.ok:
             raise RunError(f"{robot.id}: на железо не идёт (раздел 12):", envelope)
     scale = choose_speed_scale(chosen, speed_scale)
+    refuse_scale_on_a_stream(profile, scale)
     task = task_of(scenario, skill, dict(goal or {}))
     lines = plan(scenario, robot, profile, chosen, task, scale)
 

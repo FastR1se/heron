@@ -102,6 +102,18 @@ the controller's own node."""
 COMMANDS_TOPIC: Final = "commands"
 TRAJECTORY_TOPIC: Final = "joint_trajectory"
 
+TRAJECTORY_ACTION: Final = "follow_joint_trajectory"
+"""Action the trajectory controller serves, relative to its own node: take a trajectory,
+execute it, say how it ended (``joint_trajectory_controller.cpp``, ``on_configure``).
+The command class drives the controller through it, not through the topic: the topic
+takes a trajectory and never says whether it was accepted or when it ended (ADR-0060)."""
+
+TRAJECTORY_ACTION_TYPE: Final = "control_msgs/action/FollowJointTrajectory"
+
+ACTIONS: Final = frozenset({TRAJECTORY_ACTION_TYPE})
+"""Every action type the platform sends goals to, held against the transport as
+``MESSAGES`` is."""
+
 STATE_MESSAGE: Final = "sensor_msgs/msg/JointState"
 ARRAY_MESSAGE: Final = "std_msgs/msg/Float64MultiArray"
 TRAJECTORY_MESSAGE: Final = "trajectory_msgs/msg/JointTrajectory"
@@ -117,6 +129,8 @@ ADAPTER_PACKAGES: Final[dict[str, str]] = {
     "std_msgs": "desktop",
     "trajectory_msgs": "desktop",
     "builtin_interfaces": "desktop",
+    "action_msgs": "desktop",
+    "control_msgs": "control-msgs",
 }
 """Python packages the ROS 2 transport imports, and what installs each.
 
@@ -176,13 +190,18 @@ def state_interfaces(profile: RobotProfile) -> list[str]:
 
     Velocity joins when the action closes through gains: the damping term acts on
     it, and a controller asked to damp a velocity nobody reads refuses to start.
+
+    Velocity joins in the command class too. The trajectory controller reports a goal
+    reached once the joints have stopped -- the goal's velocity tolerance is
+    ``stopped_velocity_tolerance`` (``tolerances.hpp``) -- and a stop it cannot read is
+    a stop it cannot see: the end of the motion would be the end of the plan instead.
     """
     wanted = {POSITION_INTERFACE}
     for term in profile.contract.observation:
         interface = STATE_INTERFACES.get(term.type)
         if interface is not None:
             wanted.add(interface)
-    if closes_through_gains(profile):
+    if closes_through_gains(profile) or profile.control_mode is ControlMode.COMMAND:
         wanted.add(VELOCITY_INTERFACE)
     return [name for name in INTERFACE_ORDER if name in wanted]
 
@@ -228,21 +247,39 @@ def state_topic(namespace: str) -> str:
 
 
 def command_topic(namespace: str, profile: RobotProfile) -> str | None:
-    """Where this robot's commands go, or ``None`` if its action has no home."""
+    """Where this robot's commands are published, or ``None`` if they are not.
+
+    A robot of the command class is commanded through an action, not a topic
+    (``command_action``); an action with no joint interface has no home at all.
+    """
+    if profile.control_mode is ControlMode.COMMAND or command_interface(profile) is None:
+        return None
     if uses_trajectory_controller(profile):
         return qualified(namespace, controller_name(profile), TRAJECTORY_TOPIC)
-    if command_interface(profile) is None:
-        return None
     return qualified(namespace, controller_name(profile), COMMANDS_TOPIC)
 
 
 def command_message(profile: RobotProfile) -> str | None:
-    """Type of message a command becomes, or ``None`` if it becomes none."""
+    """Type of message a published command becomes, or ``None`` if none is published."""
+    if profile.control_mode is ControlMode.COMMAND or command_interface(profile) is None:
+        return None
     if uses_trajectory_controller(profile):
         return TRAJECTORY_MESSAGE
-    if command_interface(profile) is None:
-        return None
     return ARRAY_MESSAGE
+
+
+def command_action(namespace: str, profile: RobotProfile) -> str | None:
+    """Where a robot of the command class sends its goals, or ``None`` for a stream."""
+    if profile.control_mode is not ControlMode.COMMAND or command_interface(profile) is None:
+        return None
+    return qualified(namespace, controller_name(profile), TRAJECTORY_ACTION)
+
+
+def command_action_type(profile: RobotProfile) -> str | None:
+    """Type of the action a goal is sent through, or ``None`` if there is none."""
+    if profile.control_mode is not ControlMode.COMMAND or command_interface(profile) is None:
+        return None
+    return TRAJECTORY_ACTION_TYPE
 
 
 def control_plane(namespace: str, profile: RobotProfile) -> dict[str, str | None]:
@@ -259,4 +296,6 @@ def control_plane(namespace: str, profile: RobotProfile) -> dict[str, str | None
         "state_message": STATE_MESSAGE,
         "command_topic": command_topic(namespace, profile),
         "command_message": command_message(profile),
+        "command_action": command_action(namespace, profile),
+        "command_action_type": command_action_type(profile),
     }

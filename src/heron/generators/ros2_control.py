@@ -39,7 +39,7 @@ from xml.etree import ElementTree as ET
 
 import yaml
 
-from ..core.enums import TwinKind
+from ..core.enums import AngleUnit, TwinKind
 from ..core.environment import Requirement, RequirementKind, needs
 from ..core.models import RobotProfile
 from ..core.units import to_radians
@@ -61,6 +61,15 @@ ADAPTER: Final = "ros2_control"
 registers it and a profile writes it."""
 
 SPAWNER_TIMEOUT: Final = "60"
+"""How long a spawner waits for the world to come up: for the controller manager to
+appear, and for the switch that activates its controller.
+
+Both are the same condition -- a world that has started -- and are given the same
+deadline, which ends the moment the condition holds. The switch is performed in the
+manager's update loop, which runs only while the simulation steps; the spawner's own
+default for it is 5 s, "useful when switching cannot be performed immediately, e.g.,
+paused simulations at startup" (``spawner.py``, jazzy). Left at that default, a slow
+first start failed one controller and not the next (journal 2026-09-19)."""
 
 HARDWARE_PLUGIN: Final = "gz_ros2_control/GazeboSimSystem"
 """Hardware component of the simulator that owns the physics (ADR-0002)."""
@@ -105,8 +114,26 @@ REQUIREMENTS: Final[tuple[Requirement, ...]] = tuple(
 )
 
 
+def check_link(profile: RobotProfile) -> None:
+    """Refuse a robot the link to this scene could not drive.
+
+    ROS 2 measures angles in radians (REP 103), and the adapter talking to this
+    control stack does not convert (ADR-0060). The description gets its bounds in
+    radians either way; a scene whose robot would be commanded 57 times off is not
+    worth starting.
+    """
+    unit = profile.contract.angle_unit
+    if unit is not AngleUnit.RAD:
+        raise GeneratorError(
+            f"{profile.name}: контракт в {unit}, а стек ros2_control и связь с ним — в "
+            f"радианах; связь единиц не переводит (ADR-0060). Для сцены с ros2_control "
+            f"контракт — angle_unit: rad"
+        )
+
+
 def command_interface(profile: RobotProfile) -> str:
     """The one command interface this robot's action maps onto."""
+    check_link(profile)
     interface = names.command_interface(profile)
     if interface is None:
         action = profile.contract.action.type
@@ -286,6 +313,7 @@ def spawner(controller: str) -> LaunchNode:
             controller,
             "--controller-manager", "controller_manager",
             "--controller-manager-timeout", SPAWNER_TIMEOUT,
+            "--switch-timeout", SPAWNER_TIMEOUT,
         ),
     )
 

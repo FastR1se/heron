@@ -10,6 +10,7 @@ platform is written (ADR-0014).
 from .names import (
     ADAPTER_PACKAGES,
     BROADCASTER,
+    command_action,
     command_message,
     command_topic,
     controller_name,
@@ -24,6 +25,7 @@ __all__ = [
     "Reading",
     "RecordingTransport",
     "Transport",
+    "command_action",
     "command_message",
     "command_topic",
     "controller_name",

@@ -168,7 +168,7 @@ def _root_links(instances: Sequence[Instance]) -> dict[str, str]:
     return frames
 
 
-LINK_TOPICS: Final = ("command_topic", "state_topic")
+LINK_TOPICS: Final = ("command_topic", "command_action", "state_topic")
 
 
 def _check_topics(instances: Sequence[Instance]) -> None:

@@ -17,6 +17,11 @@ it is checked against ``names.MESSAGES`` from both sides.
 Two implementations ship, as with the launcher. One talks to ROS 2. One writes
 down what it was asked to publish and answers with whatever it was given, which
 is what a test and a machine without a simulator both need.
+
+A goal sent through an action is held the same way (ADR-0060): a ``Goal`` of plain
+fields goes in, a ``GoalOutcome`` -- a status and the controller's own words -- comes
+out. One goal per action at a time, because one motion at a time is the command
+class (ADR-0049).
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import time
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Final, Protocol, runtime_checkable
 
 from . import names
@@ -66,6 +72,48 @@ class Reading:
     fields: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class Goal:
+    """One goal sent through an action, as a value -- like ``Publication``."""
+
+    action: str
+    action_type: str
+    fields: dict[str, Any]
+
+
+class GoalStatus(StrEnum):
+    """Where the last goal sent through an action is, as the link last heard."""
+
+    NONE = "none"
+    """No goal was sent through this action."""
+    PENDING = "pending"
+    """Sent; the server has not answered whether it takes it."""
+    ACCEPTED = "accepted"
+    """Taken and not over: executing, or being cancelled."""
+    REJECTED = "rejected"
+    SUCCEEDED = "succeeded"
+    ABORTED = "aborted"
+    CANCELED = "canceled"
+
+
+OVER: Final = frozenset(
+    {GoalStatus.REJECTED, GoalStatus.SUCCEEDED, GoalStatus.ABORTED, GoalStatus.CANCELED}
+)
+"""Statuses after which the server does nothing more with the goal."""
+
+
+@dataclass(frozen=True, slots=True)
+class GoalOutcome:
+    """The status of a goal and what the server said about it, if anything."""
+
+    status: GoalStatus
+    detail: str = ""
+
+    @property
+    def over(self) -> bool:
+        return self.status in OVER
+
+
 @runtime_checkable
 class Transport(Protocol):
     """Publish and subscribe, as much of it as an adapter is allowed to touch."""
@@ -94,6 +142,21 @@ class Transport(Protocol):
         only silence would make the reader guess between them (ADR-0016).
         """
 
+    def connect_action(self, action: str, action_type: str) -> None: ...
+
+    def action_ready(self, action: str, timeout: float = 0.0) -> bool:
+        """Whether the server of this action is there to take a goal, waiting **up to**
+        ``timeout`` for it to appear -- a deadline on a condition, as ``poll`` has."""
+
+    def send_goal(self, goal: Goal) -> None:
+        """Send a goal; the previous one through the same action is no longer followed."""
+
+    def goal_status(self, action: str, timeout: float = 0.0) -> GoalOutcome:
+        """The last goal's outcome, waiting **up to** ``timeout`` for it to leave ``pending``."""
+
+    def cancel_goal(self, action: str) -> None:
+        """Ask the server to stop the last goal, if it took it and it is not over."""
+
     def close(self) -> None: ...
 
 
@@ -114,6 +177,16 @@ Not a description of the message type -- the type has more fields than these --
 but of the part the platform fills in or reads out. Anything omitted is left at
 the default the message class itself defines, which is the honest treatment of
 a field the platform has nothing to say about."""
+
+
+GOAL_FIELDS: Final[dict[str, tuple[str, ...]]] = {
+    names.TRAJECTORY_ACTION_TYPE: ("trajectory",),
+}
+"""Fields of each goal this platform sends, the part it fills in.
+
+The tolerances of ``FollowJointTrajectory`` are not among them: left empty, they are
+the controller's own configuration, which is where the generator put what the
+platform has to say about the end of a motion."""
 
 
 def message_class_path(message_type: str) -> tuple[str, str]:
@@ -160,6 +233,17 @@ class RecordingTransport:
 
     closed: bool = False
 
+    actions: dict[str, str] = field(default_factory=dict)
+    servers: set[str] = field(default_factory=set)
+    """Action servers this link pretends to see."""
+
+    goals: list[Goal] = field(default_factory=list)
+    outcomes: dict[str, GoalOutcome] = field(default_factory=dict)
+    cancelled: list[str] = field(default_factory=list)
+    answer: GoalStatus = GoalStatus.ACCEPTED
+    """How a server this link sees answers a goal: it takes it, unless a test says
+    otherwise. A goal to a server it does not see stays pending."""
+
     def advertise(self, topic: str, message_type: str) -> None:
         self.advertised[topic] = message_type
 
@@ -184,10 +268,37 @@ class RecordingTransport:
     def publisher_count(self, topic: str) -> int:
         return self.publishers.get(topic, 0)
 
+    def connect_action(self, action: str, action_type: str) -> None:
+        self.actions[action] = action_type
+
+    def action_ready(self, action: str, timeout: float = 0.0) -> bool:
+        return action in self.servers
+
+    def send_goal(self, goal: Goal) -> None:
+        if goal.action not in self.actions:
+            raise TransportError(
+                f"{goal.action}: цель в необъявленное действие; сначала connect_action()"
+            )
+        self.goals.append(goal)
+        answer = self.answer if goal.action in self.servers else GoalStatus.PENDING
+        self.outcomes[goal.action] = GoalOutcome(answer)
+
+    def goal_status(self, action: str, timeout: float = 0.0) -> GoalOutcome:
+        return self.outcomes.get(action, GoalOutcome(GoalStatus.NONE))
+
+    def cancel_goal(self, action: str) -> None:
+        self.cancelled.append(action)
+        if self.goal_status(action).status is GoalStatus.ACCEPTED:
+            self.outcomes[action] = GoalOutcome(GoalStatus.CANCELED)
+
     def close(self) -> None:
         self.closed = True
 
     # -- feeding it, which only a caller in the same process can do ---------
+
+    def settle(self, action: str, status: GoalStatus, detail: str = "") -> None:
+        """Make the server say what became of the last goal, as a controller would."""
+        self.outcomes[action] = GoalOutcome(status, detail)
 
     def deliver(self, reading: Reading) -> None:
         self.queues.setdefault(reading.topic, deque()).append(reading)
@@ -242,6 +353,7 @@ class RclpyTransport:
         self._owns_context = False
         self._publishers: dict[str, Any] = {}
         self._latest: dict[str, Reading] = {}
+        self._actions: dict[str, _ActionLink] = {}
         self._start()
 
     # -- Transport ----------------------------------------------------------
@@ -293,7 +405,56 @@ class RclpyTransport:
     def publisher_count(self, topic: str) -> int:
         return int(self._node.count_publishers(topic))
 
+    def connect_action(self, action: str, action_type: str) -> None:
+        client = _import_ros2("rclpy.action").ActionClient
+        self._actions[action] = _ActionLink(
+            client=client(self._node, _message_class(action_type), action)
+        )
+
+    def action_ready(self, action: str, timeout: float = 0.0) -> bool:
+        client = self._action(action).client
+        deadline = time.monotonic() + timeout
+        while True:
+            # Spinning keeps the state subscription served while the server is looked
+            # for; it returns as soon as something arrives, so this is not a pause.
+            self._executor.spin_once(timeout_sec=min(max(deadline - time.monotonic(), 0.0), 0.1))
+            if client.server_is_ready():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+
+    def send_goal(self, goal: Goal) -> None:
+        link = self._action(goal.action)
+        link.follow(link.client.send_goal_async(_build_goal(goal)))
+
+    def goal_status(self, action: str, timeout: float = 0.0) -> GoalOutcome:
+        """The last goal's outcome, spinning up to ``timeout`` while it is pending.
+
+        Answers and results arrive as callbacks of the same executor the state
+        subscription runs on, so reading the state moves them along as well.
+        """
+        link = self._action(action)
+        deadline = time.monotonic() + timeout
+        self._executor.spin_once(timeout_sec=0.0)
+        while link.outcome.status is GoalStatus.PENDING:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._executor.spin_once(timeout_sec=remaining)
+        return link.outcome
+
+    def cancel_goal(self, action: str) -> None:
+        link = self._action(action)
+        if link.handle is not None and link.outcome.status is GoalStatus.ACCEPTED:
+            # The request leaves when it is made; spinning only brings the answer,
+            # which the result of the goal repeats.
+            link.handle.cancel_goal_async()
+            self._executor.spin_once(timeout_sec=0.0)
+
     def close(self) -> None:
+        for link in self._actions.values():
+            link.client.destroy()
+        self._actions.clear()
         if self._executor is not None:
             self._executor.shutdown()
             self._executor = None
@@ -305,6 +466,12 @@ class RclpyTransport:
             self._owns_context = False
 
     # -- internals ----------------------------------------------------------
+
+    def _action(self, action: str) -> _ActionLink:
+        link = self._actions.get(action)
+        if link is None:
+            raise TransportError(f"{action}: действие не объявлено; сначала connect_action()")
+        return link
 
     def _start(self) -> None:
         if not self._rclpy.ok():
@@ -322,6 +489,61 @@ class RclpyTransport:
         # nothing (ADR-0016).
         self._executor = _import_ros2("rclpy.executors").SingleThreadedExecutor()
         self._executor.add_node(self._node)
+
+
+@dataclass(slots=True)
+class _ActionLink:
+    """One action client and what became of the last goal sent through it."""
+
+    client: Any
+    outcome: GoalOutcome = GoalOutcome(GoalStatus.NONE)
+    handle: Any = None
+    generation: int = 0
+
+    def follow(self, sent: Any) -> None:
+        """Follow a goal from its sending to its result. A goal sent later replaces it:
+        a callback of the earlier one that arrives after that changes nothing."""
+        self.generation += 1
+        generation = self.generation
+        self.outcome = GoalOutcome(GoalStatus.PENDING)
+        self.handle = None
+
+        def finished(future: Any) -> None:
+            if generation == self.generation:
+                self.outcome = _outcome_of(future.result())
+
+        def answered(future: Any) -> None:
+            if generation != self.generation:
+                return
+            handle = future.result()
+            if handle is None or not handle.accepted:
+                self.outcome = GoalOutcome(GoalStatus.REJECTED, "сервер не принял цель")
+                return
+            self.handle = handle
+            self.outcome = GoalOutcome(GoalStatus.ACCEPTED)
+            handle.get_result_async().add_done_callback(finished)
+
+        sent.add_done_callback(answered)
+
+
+def _outcome_of(response: Any) -> GoalOutcome:
+    """The end of a goal: the terminal status of ``action_msgs`` and the result's words."""
+    codes = _import_ros2("action_msgs.msg").GoalStatus
+    status = {
+        codes.STATUS_SUCCEEDED: GoalStatus.SUCCEEDED,
+        codes.STATUS_ABORTED: GoalStatus.ABORTED,
+        codes.STATUS_CANCELED: GoalStatus.CANCELED,
+    }.get(response.status)
+    result = response.result
+    words = " ".join(
+        str(part)
+        for part in (getattr(result, "error_code", ""), getattr(result, "error_string", ""))
+        if part not in ("", None)
+    )
+    if status is None:
+        # A result with no terminal status is over without having succeeded.
+        return GoalOutcome(GoalStatus.ABORTED, f"статус действия {response.status}; {words}")
+    return GoalOutcome(status, words)
 
 
 def _import_ros2(module: str) -> Any:
@@ -369,6 +591,26 @@ def _build(message: Publication) -> Any:
         return _build_trajectory(built, message.fields)
     for key, value in message.fields.items():
         setattr(built, key, list(value) if isinstance(value, list | tuple) else value)
+    return built
+
+
+def _build_goal(goal: Goal) -> Any:
+    """Turn a goal into an instance of its action's ``Goal`` class."""
+    known = GOAL_FIELDS.get(goal.action_type)
+    if known is None:
+        raise UnknownMessageError(
+            f"{goal.action_type}: транспорт не умеет собирать цель этого действия. "
+            f"Умеет: {', '.join(sorted(GOAL_FIELDS))}"
+        )
+    unknown = sorted(set(goal.fields) - set(known))
+    if unknown:
+        raise UnknownMessageError(f"{goal.action_type}: неизвестные поля цели {', '.join(unknown)}")
+
+    built = _message_class(goal.action_type).Goal()
+    if goal.action_type == names.TRAJECTORY_ACTION_TYPE:
+        built.trajectory = _build_trajectory(
+            _message_class(names.TRAJECTORY_MESSAGE)(), goal.fields["trajectory"]
+        )
     return built
 
 

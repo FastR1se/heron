@@ -42,7 +42,7 @@ readonly VERIFY_ENVS="ros2 gazebo mujoco isaac"
 # ADAPTER_PACKAGES in src/heron/ros2/names.py, and verify_mujoco checks that the
 # execution environment can actually import them (ADR-0014). A requirement that
 # is declared and never checked is how phase 2 lost a scene.
-readonly ADAPTER_IMPORTS="rclpy sensor_msgs std_msgs trajectory_msgs builtin_interfaces"
+readonly ADAPTER_IMPORTS="rclpy sensor_msgs std_msgs trajectory_msgs builtin_interfaces action_msgs control_msgs"
 
 # Thresholds from ADR-0005. Changing a number here is a decision, not a tweak.
 readonly MIN_SWAP_GIB=16                  # 15.3 GiB RAM: swap is what keeps Isaac alive
@@ -359,6 +359,7 @@ install_ros2() {
     # Control stack and URDF tooling: needed from phase 2 onward, cheap to add now.
     apt_install "ros-${ROS_DISTRO_NAME}-ros2-control" \
                 "ros-${ROS_DISTRO_NAME}-ros2-controllers" \
+                "ros-${ROS_DISTRO_NAME}-control-msgs" \
                 "ros-${ROS_DISTRO_NAME}-xacro" \
                 "ros-${ROS_DISTRO_NAME}-robot-state-publisher" \
                 "ros-${ROS_DISTRO_NAME}-joint-state-publisher" \

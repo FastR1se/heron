@@ -358,6 +358,49 @@ def test_a_dry_run_refuses_the_scale_the_run_would_refuse(tmp_path: Path) -> Non
     assert "не исполняет шкалу скорости" in result.output
 
 
+def test_the_plan_of_a_command_robot_in_gazebo_names_the_action_it_sends_goals_to(
+    tmp_path: Path,
+) -> None:
+    """The command class through ros2_control: goals to the trajectory controller's
+    action, not commands on a topic (ADR-0060)."""
+    write_urdf(tmp_path, "arm", JOINTS)
+    write_profile(
+        tmp_path,
+        make_command_profile(
+            name="arm",
+            description=ModelDescription(urdf="urdf/arm.urdf"),
+            adapters={"sim.gazebo": AdapterSpec(plugin="ros2_control")},
+        ),
+    )
+    path = scenario(
+        tmp_path,
+        world={"backend": "gazebo"},
+        task={"skill": "goto_joints", "target": [0.2, 0.0, 0.0], "tolerance": 0.01},
+    )
+    result = run(path, tmp_path, "--speed-scale", "0.5", "--dry-run")
+
+    assert result.exit_code == EXIT_OK, result.output
+    assert "цели      /arm1/joint_trajectory_controller/follow_joint_trajectory" in result.output
+    assert "шкала     скорости 0.5" in result.output
+
+
+def test_a_stream_is_not_slowed_whatever_its_adapter_says(tmp_path: Path) -> None:
+    """Known from the profile: a stream is planned by its skill (ADR-0052)."""
+    write_urdf(tmp_path, "arm", JOINTS)
+    write_profile(
+        tmp_path,
+        make_profile(
+            name="arm",
+            description=ModelDescription(urdf="urdf/arm.urdf"),
+            adapters={"sim.dummy": AdapterSpec(plugin="dummy")},
+        ),
+    )
+    result = run(scenario(tmp_path), tmp_path, "--speed-scale", "0.5", "--dry-run")
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "робот потокового класса" in result.output
+
+
 def test_a_dry_run_without_the_plugin_says_the_scale_is_unchecked(tmp_path: Path) -> None:
     path = _hardware(tmp_path, plugin="test_cli_run:AbsentAdapter")
     result = run(path, tmp_path, "--target", "real", "--speed-scale", "0.5", "--dry-run")

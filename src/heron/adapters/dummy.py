@@ -29,9 +29,7 @@ before any such robot exists.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from ..core.capabilities import Capability, parse_set
@@ -41,6 +39,7 @@ from ..core.models import SPEED_SCALE_PARAM, Limits, RobotProfile
 from ..core.protocols import CommandRefusedError
 from ..core.types import Command, Pose, RobotState
 from .common import outside_bounds
+from .motion import Motion, plan
 
 
 class SafetyViolationError(CommandRefusedError):
@@ -57,75 +56,6 @@ class NotConnectedError(RuntimeError):
 
 class LinkConfigurationError(RuntimeError):
     """The profile or the run asks for something this link cannot do. Raised by ``connect``."""
-
-
-@dataclass(frozen=True, slots=True)
-class Trapezoid:
-    """One joint from rest to rest over ``distance``, within a speed and an acceleration.
-
-    A triangle when the distance is too short to reach ``speed``.
-    """
-
-    distance: float
-    speed: float
-    acceleration: float
-
-    @property
-    def peak(self) -> float:
-        return min(self.speed, math.sqrt(abs(self.distance) * self.acceleration))
-
-    @property
-    def ramp(self) -> float:
-        return self.peak / self.acceleration
-
-    @property
-    def cruise(self) -> float:
-        peak = self.peak
-        return (abs(self.distance) - peak * self.ramp) / peak if peak > 0 else 0.0
-
-    @property
-    def duration(self) -> float:
-        return 2 * self.ramp + self.cruise
-
-    def at(self, t: float) -> tuple[float, float]:
-        """Travelled distance and velocity, signed, ``t`` seconds after the start."""
-        sign = math.copysign(1.0, self.distance)
-        a, peak, ramp, total = self.acceleration, self.peak, self.ramp, self.duration
-        if t <= 0 or total == 0:
-            return 0.0, 0.0
-        if t >= total:
-            return self.distance, 0.0
-        if t < ramp:
-            return sign * a * t * t / 2, sign * a * t
-        if t < ramp + self.cruise:
-            return sign * (a * ramp * ramp / 2 + peak * (t - ramp)), sign * peak
-        left = total - t
-        return sign * (abs(self.distance) - a * left * left / 2), sign * a * left
-
-
-@dataclass(frozen=True, slots=True)
-class Motion:
-    """The accepted motion of a command link."""
-
-    started: float
-    start: tuple[float, ...]
-    joints: tuple[Trapezoid, ...]
-
-    @property
-    def duration(self) -> float:
-        return max(joint.duration for joint in self.joints)
-
-    def over(self, time: float) -> bool:
-        """Reported over by the reading after its end, never by the one it was accepted at."""
-        return time - self.started > self.duration
-
-    def at(self, time: float) -> tuple[list[float], list[float]]:
-        position, velocity = [], []
-        for begin, joint in zip(self.start, self.joints, strict=True):
-            travelled, speed = joint.at(time - self.started)
-            position.append(begin + travelled)
-            velocity.append(speed)
-        return position, velocity
 
 
 class DummyAdapter:
@@ -360,18 +290,8 @@ class DummyAdapter:
         speeds = self._limits.joint_velocity
         accelerations = self._limits.joint_acceleration
         assert speeds is not None and accelerations is not None  # checked on connect
-        scale = self._speed_scale
-        # Velocity times s and acceleration times s squared: the same motion in 1/s
-        # the time. Acceleration times s would stretch a ramp by 1/sqrt(s) (ADR-0057).
-        self._motion = Motion(
-            started=self._time,
-            start=tuple(self._position),
-            joints=tuple(
-                Trapezoid(goal - begin, speed * scale, acceleration * scale**2)
-                for goal, begin, speed, acceleration in zip(
-                    target, self._position, speeds.max, accelerations.max, strict=True
-                )
-            ),
+        self._motion = plan(
+            self._time, self._position, target, speeds.max, accelerations.max, self._speed_scale
         )
 
     def _advance_motion(self) -> MotionPhase:
