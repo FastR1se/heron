@@ -255,3 +255,68 @@ def test_a_generated_stub_validates_against_its_own_description() -> None:
             report = check_profile(profile, path=profile_path)
             assert report.ok, report.codes()
             assert profile.control_mode is mode
+
+
+# -- the decision log is an index, not prose -------------------------------
+
+
+DECISIONS = REPO_ROOT / "docs" / "decisions"
+GUIDE = REPO_ROOT / "CLAUDE.md"
+CARD = "[0-9][0-9][0-9][0-9]-*.md"
+REFERENCE = re.compile(r"ADR-(\d{4})")
+SEARCHED = ("src", "tests", "examples", "scripts", ".github", "docs/plans")
+
+
+def card_numbers() -> set[str]:
+    return {path.name[:4] for path in DECISIONS.glob(CARD)}
+
+
+def indexed_numbers() -> set[str]:
+    """Numbers CLAUDE.md names, including the grouped entries.
+
+    The index writes one line per decision, but related decisions share a line:
+    ``**0035-0037**`` as a range, ``**0052, 0057**`` as a list. Both forms are
+    read here so that the guide stays free to group.
+    """
+    numbers: set[str] = set()
+    for entry in re.findall(r"^- \*\*([0-9–—,\- ]+)\*\*", GUIDE.read_text("utf-8"), re.M):
+        for part in entry.split(","):
+            bounds = re.findall(r"\d{4}", part)
+            if len(bounds) == 2:
+                numbers.update(f"{n:04d}" for n in range(int(bounds[0]), int(bounds[1]) + 1))
+            elif bounds:
+                numbers.add(bounds[0])
+    return numbers
+
+
+def test_every_decision_is_named_in_the_guide() -> None:
+    """CLAUDE.md is the index of the decision log, and an index with holes is worse
+    than none: a decision nobody is pointed at is a decision nobody reads before
+    working in its area. The rule "новое решение — одна строка сюда" is checked
+    rather than trusted, in both directions.
+    """
+    cards, indexed = card_numbers(), indexed_numbers()
+    missing = sorted(cards - indexed)
+    assert not missing, "карточки есть, строки в CLAUDE.md нет: " + ", ".join(missing)
+    invented = sorted(indexed - cards)
+    assert not invented, "CLAUDE.md называет решения без карточек: " + ", ".join(invented)
+
+
+def test_decision_references_resolve() -> None:
+    """Five hundred references to seventy cards, and renumbering has happened once
+    already (the phase cards ADR-P8A..P8F became ADR-0065..0070). A reference to a
+    number that no longer exists points the reader at nothing.
+    """
+    dangling: list[str] = []
+    cards = card_numbers()
+    for root in SEARCHED:
+        for path in sorted((REPO_ROOT / root).rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            for number in sorted(set(REFERENCE.findall(text)) - cards):
+                dangling.append(f"{path.relative_to(REPO_ROOT).as_posix()}: ADR-{number}")
+    assert not dangling, "ссылка на решение без карточки:\n" + "\n".join(dangling)
