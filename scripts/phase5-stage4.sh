@@ -15,7 +15,7 @@
 #           watched (0.25), then --full: model and version (0.22), scale; then pairs
 #           act_q / act_flange_x in poses a human sets, compared with the description
 #           (ADR-0055). No motion from the platform.
-#   reqs    validate; skill check refuses move_joints (criterion 3); env check; dry runs:
+#   reqs    validate; skill check refuses move_joints (criterion 3); dry runs:
 #           with a scale the plan is printed, without one the run is refused (ADR-0052);
 #           the profile states host and model
 #   refuse  a target outside the envelope: refused before sending, the robot does not move
@@ -119,15 +119,10 @@ step_env() {
     "$PY" -m pip install -q -e "$REPO_ROOT[record]" -e "$PACKAGE" "$API_DIR" \
         && record "env установка" ok "платформа, пакет RC, API из $API_DIR" \
         || record "env установка" отказ "pip install не прошёл"
-    # env check answers for the scenario's world (dummy) and takes no target; the adapter
-    # of `real` is checked by run before connect. Here the same three requirements by hand.
-    "$PY" - <<'PY' && record "env требования" ok "API 1.4.1, numpy, scipy" \
-        || record "env требования" отказ "см. вывод"
-import importlib.metadata as m, importlib.util as u, sys
-version = m.version("API")
-print("API", version, "numpy", m.version("numpy"), "scipy", m.version("scipy"), sys.version)
-sys.exit(0 if version == "1.4.1" and u.find_spec("numpy") and u.find_spec("scipy") else 1)
-PY
+    # The adapter's own requirements, as run checks them before connect (ADR-0025, ADR-0051).
+    "$CLI" env check "$SCENARIO" --registry "$REGISTRY" --target real \
+        && record "env требования" ok "адаптер real: API 1.4.1, numpy, scipy" \
+        || record "env требования" отказ "см. вывод env check"
 }
 
 step_probe() {

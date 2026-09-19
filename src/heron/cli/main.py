@@ -22,9 +22,9 @@ import yaml
 
 from ..core.branding import APP_NAME, APP_TITLE, data_home, env_var, image_name, registry_root
 from ..core.capabilities import CORE_CAPABILITIES, EXTENSION_PREFIX
-from ..core.enums import ControlMode, Severity
+from ..core.enums import ControlMode, Role, Severity
 from ..core.loading import LoadError, load_model, read_yaml
-from ..core.models import PolicyRef, RobotProfile, Scenario
+from ..core.models import REAL_TARGET, PolicyRef, RobotProfile, Scenario
 from ..core.plugins import PluginError, load
 from ..generators.bundle import build, build_profile
 from ..generators.common import Bundle, GeneratorError
@@ -42,7 +42,12 @@ from ..train.tasks import installed_tasks
 from ..validator.environment import LocalMachine, check_environment, check_requirements
 from ..validator.policy import check_policy_against_profile
 from ..validator.report import Report
-from ..validator.rules import check_profile, check_scenario, check_skill_against_profile
+from ..validator.rules import (
+    check_profile,
+    check_real_target,
+    check_scenario,
+    check_skill_against_profile,
+)
 from .mission import mission_app
 from .new_robot import write_stub
 from .new_task import write_stub as write_task_stub
@@ -558,6 +563,10 @@ def task_new(
 @env_app.command("check")
 def env_check(
     scenario_file: Annotated[Path, typer.Argument(help="Файл сценария.")],
+    target: Annotated[
+        str | None,
+        typer.Option("--target", help="Ключ адаптера, как у run; по умолчанию — из бэкенда сцены."),
+    ] = None,
     roots: RootsOption = None,
 ) -> None:
     """Хватит ли этой машине окружения, чтобы поднять сцену и вести её роботов.
@@ -565,6 +574,8 @@ def env_check(
     Сначала сценарий проверяется валидатором, затем требования сторон связи
     каждого управляемого робота: адаптера (их проверяет run) и двойника (их
     проверяет sim run). Ответ — про эту машину, поэтому validate его не даёт.
+    С --target real — адаптеры железа и рамка профиля, как их проверит run;
+    мира и двойников у такого прогона нет (ADR-0051).
     """
     try:
         scenario = load_scenario(scenario_file)
@@ -573,7 +584,14 @@ def env_check(
         raise typer.Exit(EXIT_UNREADABLE) from exc
 
     registry = _registry(roots)
-    environment = check_environment(scenario, registry)
+    environment = check_environment(scenario, registry, target=target)
+    if target == REAL_TARGET:
+        for name in dict.fromkeys(r.profile for r in scenario.robots if r.role is not Role.STATIC):
+            try:
+                profile = registry.source(name).profile
+            except ProfileNotFoundError:
+                continue  # the validator names it
+            environment.report.extend(check_real_target(profile).findings)
     for side in environment.checked:
         typer.echo(f"проверено  {side.where}: требований {side.requirements}")
     if environment.checked:

@@ -273,14 +273,17 @@ def test_the_local_machine_finds_programs_on_its_path_and_variables_in_its_envir
 # -- sides of a scene ------------------------------------------------------------
 
 
-def _registry(tmp_path: Path, plugin: str = "ros2_control") -> Registry:
+def _registry(tmp_path: Path, plugin: str = "ros2_control", *, real: bool = False) -> Registry:
+    adapters = {
+        "sim.gazebo": AdapterSpec(plugin=plugin),
+        "sim.dummy": AdapterSpec(plugin="dummy"),
+    }
+    if real:
+        adapters["real"] = AdapterSpec(plugin="dummy")
     profile = make_profile(
         name="arm",
         description=ModelDescription(urdf="urdf/arm.urdf"),
-        adapters={
-            "sim.gazebo": AdapterSpec(plugin=plugin),
-            "sim.dummy": AdapterSpec(plugin="dummy"),
-        },
+        adapters=adapters,
     )
     write_urdf(tmp_path, "arm", list(profile.contract.joint_order))
     write_profile(tmp_path, profile)
@@ -332,6 +335,25 @@ def test_a_world_the_platform_does_not_start_has_no_twin_side(tmp_path: Path) ->
     )
     assert [side.where for side in result.checked] == ["adapter:dummy"]
     assert result.report.ok
+
+
+def test_a_real_target_checks_its_adapter_and_needs_no_world(tmp_path: Path) -> None:
+    """On hardware the robot owns the physics (ADR-0051): the scene's twins are not needed."""
+    result = check_environment(
+        _scenario(), _registry(tmp_path, real=True), target="real", machine=FakeMachine()
+    )
+    assert [side.where for side in result.checked] == ["adapter:dummy"]
+    assert result.report.ok
+
+
+def test_a_target_the_profile_has_no_adapter_for_is_an_error(tmp_path: Path) -> None:
+    result = check_environment(
+        _scenario(), _registry(tmp_path), target="real", machine=FakeMachine()
+    )
+    assert [(finding.code, finding.detail) for finding in result.report.findings] == [
+        ("env.target_adapter_missing", {"target": "real", "profile": "arm"})
+    ]
+    assert result.checked == []
 
 
 def test_an_obstacle_has_no_link_and_no_requirements(tmp_path: Path) -> None:
@@ -411,6 +433,19 @@ def test_env_check_of_a_scene_needing_nothing_is_clean(tmp_path: Path) -> None:
     )
     assert result.exit_code == cli.EXIT_OK, result.output
     assert "проверено  adapter:dummy: требований 0" in result.output
+
+
+def test_env_check_for_hardware_checks_the_real_adapter_not_the_world(
+    tmp_path: Path, bare_machine: FakeMachine
+) -> None:
+    _registry(tmp_path, real=True)
+    scene = str(_scene_file(tmp_path, "gazebo"))
+    arguments = ["env", "check", scene, "--target", "real", "-R", str(tmp_path)]
+    result = runner.invoke(cli.app, arguments)
+
+    assert result.exit_code == cli.EXIT_OK, result.output
+    assert "проверено  adapter:dummy: требований 0" in result.output
+    assert "twin:" not in result.output
 
 
 def test_sim_run_starts_no_world_on_a_machine_its_twins_cannot_run_on(

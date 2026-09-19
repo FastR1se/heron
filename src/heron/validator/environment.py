@@ -337,6 +337,7 @@ def check_environment(
     world: bool = True,
     robots: bool = True,
     robot_id: str | None = None,
+    target: str | None = None,
     machine: Machine | None = None,
 ) -> EnvironmentCheck:
     """Both sides of every driven robot's link in a scene, each side checked once.
@@ -347,17 +348,35 @@ def check_environment(
     and is not repeated here. An adapter that cannot be loaded is only a warning
     to the validator, which answers for every machine; on this one it means the
     robot cannot be driven, so here it is an error.
+
+    ``target`` is the adapter key a run would use, as ``run --target`` takes it:
+    the scene's simulation by default. Any other target owns the physics itself
+    (ADR-0051), so the scene's world and its twins are not this run's to need; a
+    driven robot without an adapter for that target cannot be run there at all.
     """
     machine = machine or LocalMachine()
     backend = scenario.world.backend
-    target = sim_target(backend)
-    world_started = world and backend in available("sim")
+    scene_target = sim_target(backend)
+    key = scene_target if target is None else target
+    world_started = world and key == scene_target and backend in available("sim")
     result = EnvironmentCheck()
     seen: set[str] = set()
 
-    for _, profile in _driven(scenario, registry, robot_id):
-        spec = profile.adapters.get(target)
+    for robot, profile in _driven(scenario, registry, robot_id):
+        spec = profile.adapters.get(key)
         if spec is None:
+            if key != scene_target:
+                result.report.add(
+                    error(
+                        "env.target_adapter_missing",
+                        f"scenario:{scenario.name}.robots.{robot}",
+                        f"у профиля {profile.name!r} нет адаптера {key!r}; "
+                        f"есть: {', '.join(sorted(profile.adapters)) or '—'}",
+                        hint="адаптер цели объявляется в adapters профиля; run откажет так же",
+                        adr="ADR-0051",
+                        detail={"target": key, "profile": profile.name},
+                    )
+                )
             continue
         if robots and f"adapter:{spec.plugin}" not in seen:
             seen.add(f"adapter:{spec.plugin}")
