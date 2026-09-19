@@ -69,6 +69,7 @@ def check_profile(
     _check_image(profile, report)
     _check_adapters(profile, report)
     _check_skill_bindings(profile, report, store)
+    _check_declared_skills(profile, report)
     if path is not None:
         report.extend(check_description(profile, path).findings)
         report.extend(check_mjcf(profile, path).findings)
@@ -298,6 +299,40 @@ def _check_skill_bindings(
         report.extend(
             check_policy_against_profile(artifact.manifest, profile, artifact=artifact).findings
         )
+
+
+def _check_declared_skills(profile: RobotProfile, report: Report) -> None:
+    """A skill the profile declares as code is one this robot can run (ADR-0049).
+
+    The same rules as ``skill check`` and the executor's ``check_runnable``, so a
+    streaming skill on a command robot is refused by ``validate``, not after
+    ``connect``. A skill bound to a policy is checked against its artifact above.
+    A skill that is not installed here is a warning, as an adapter is: CI runs
+    without vendor packages, and the absence fails where it matters -- ``run``.
+    """
+    # The library imports the learned skill, which imports the validator: resolving
+    # names at call time keeps the two packages importable in either order.
+    from ..skills.library import SkillLibrary, SkillNotFoundError
+
+    library = SkillLibrary()
+    for binding in profile.skills:
+        if binding.ref is not None:
+            continue
+        try:
+            spec = library.spec(binding.name)
+        except SkillNotFoundError as exc:
+            report.add(
+                warning(
+                    "skill.not_installed",
+                    f"profile:{profile.name}.skills.{binding.name}",
+                    str(exc),
+                    hint="навык не встроен и не установлен пакетом на этой машине; run откажет",
+                    adr="ADR-0046",
+                    detail={"skill": binding.name},
+                )
+            )
+            continue
+        report.extend(check_skill_against_profile(spec, profile).findings)
 
 
 def _check_image(profile: RobotProfile, report: Report) -> None:

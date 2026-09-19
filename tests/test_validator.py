@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import make_contract, make_policy_contract, make_profile
+from conftest import make_command_profile, make_contract, make_policy_contract, make_profile
 from heron.core.capabilities import Capability
 from heron.core.contract import ActionSpec, Contract, ObservationTerm
 from heron.core.enums import ActionOffset, ActionType, ControlMode, ObservationType
@@ -172,6 +172,31 @@ def test_command_skill_rejected_on_streaming_robot() -> None:
     report = check_skill_against_profile(skill, make_profile())
     assert [(item.code, item.detail) for item in report.errors] == [
         ("skill.control_mode_incompatible", {"required": "command", "actual": "streaming"})
+    ]
+
+
+def test_validate_refuses_a_streaming_skill_declared_by_a_command_profile() -> None:
+    """The profile's own skills are checked by ``validate``, not first after ``connect``."""
+    report = check_profile(make_command_profile(skills=("goto_joints", "move_joints")))
+    assert [(item.code, item.where, item.detail) for item in report.errors] == [
+        (
+            "skill.control_mode_incompatible",
+            "skill:move_joints -> profile:command_arm",
+            {"required": "streaming", "actual": "command"},
+        )
+    ]
+
+
+def test_skills_matching_the_robot_pass_validate() -> None:
+    assert check_profile(make_profile()).ok
+    assert check_profile(make_command_profile()).ok
+
+
+def test_a_skill_not_installed_here_is_a_warning() -> None:
+    report = check_profile(make_profile(skills=("hold", "wave_hello")))
+    assert report.ok
+    assert [(item.code, item.detail) for item in report.warnings] == [
+        ("skill.not_installed", {"skill": "wave_hello"})
     ]
 
 
