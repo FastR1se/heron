@@ -1,6 +1,7 @@
 [project]
 name = "heron"
-version = "0.4.0"
+# One place for the version: the package itself (hatch reads it from there).
+dynamic = ["version"]
 description = "Modelling platform for heterogeneous robotic systems"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -68,6 +69,9 @@ ros2_control_gazebo = "heron.generators.ros2_control:Ros2ControlTwin"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/heron/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/heron"]
