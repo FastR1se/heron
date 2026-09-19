@@ -349,6 +349,23 @@ def test_an_adapter_that_cannot_slow_the_robot_is_not_handed_a_scale(tmp_path: P
     assert "не исполняет шкалу скорости" in result.output
 
 
+def test_a_dry_run_refuses_the_scale_the_run_would_refuse(tmp_path: Path) -> None:
+    """The declaration is read off the class: nothing is connected to answer it."""
+    path = _hardware(tmp_path, plugin="test_cli_run:StreamOnlyAdapter")
+    result = run(path, tmp_path, "--target", "real", "--speed-scale", "0.5", "--dry-run")
+
+    assert result.exit_code == EXIT_FOUND_ERRORS
+    assert "не исполняет шкалу скорости" in result.output
+
+
+def test_a_dry_run_without_the_plugin_says_the_scale_is_unchecked(tmp_path: Path) -> None:
+    path = _hardware(tmp_path, plugin="test_cli_run:AbsentAdapter")
+    result = run(path, tmp_path, "--target", "real", "--speed-scale", "0.5", "--dry-run")
+
+    assert result.exit_code == EXIT_OK, result.output
+    assert "шкала     не сверена с адаптером" in result.output
+
+
 def test_the_scale_reaches_the_adapter_and_slows_the_run(tmp_path: Path) -> None:
     path = _hardware(tmp_path, plugin="test_cli_run:ScaledAdapter")
     from heron.scenario.loader import load_scenario

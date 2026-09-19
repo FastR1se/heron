@@ -405,8 +405,16 @@ def execute(
     if record is not None:
         lines.append(f"запись    {record}")
     if dry_run:
-        # Nothing is connected and nothing is loaded: a dry run must be
-        # possible on a machine that has neither the robot nor the plugin.
+        # Nothing is connected and nothing is constructed: a dry run must be possible
+        # on a machine that has neither the robot nor the plugin. Whether the link
+        # executes the scale is a declaration of its class (ADR-0052), so a plugin that
+        # is here answers it, and a plan that says "go" is not refused by the run.
+        try:
+            factory = adapter_class(profile, chosen)
+        except RunError as exc:
+            lines.append(f"шкала     не сверена с адаптером: {exc}")
+        else:
+            refuse_undeclared_scale(profile.adapters[chosen].plugin, factory, scale)
         return lines, None
 
     if record is not None:

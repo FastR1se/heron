@@ -22,6 +22,13 @@ adapter takes, and for the same reason: silent repair is worse than a stop.
 with the contract's action is refused rather than converted. The controller on
 the other end accepts exactly one kind of quantity, and sending it another kind
 in the right shape is how a position lands in a velocity interface.
+
+*It is a link of the streaming class, and says so* (ADR-0058). A link of the
+command class reports the phase of the motion, plans the motion within the
+profile's envelope and refuses a second one while the first runs (ADR-0049);
+this one does none of it, so a profile of that class is refused on ``connect``
+rather than driven as if it were one. Reporting the profile's class back would
+pass every check before the first tick and fail on it.
 """
 
 from __future__ import annotations
@@ -112,6 +119,10 @@ class StateMismatchError(RuntimeError):
     """What arrived on the state topic does not match the contract."""
 
 
+class UnsupportedControlModeError(RuntimeError):
+    """The profile declares a class of interface this link does not implement (ADR-0058)."""
+
+
 class Ros2ControlAdapter:
     """Drives a robot through its controllers and reads its broadcaster."""
 
@@ -126,7 +137,6 @@ class Ros2ControlAdapter:
         self._profile: RobotProfile | None = None
         self._namespace = ""
         self._capabilities: frozenset[Capability] = frozenset()
-        self._control_mode: ControlMode = ControlMode.STREAMING
         self._limits: Limits = Limits()
         self._enforce_limits = True
         self._poll_s = DEFAULT_POLL_S
@@ -140,6 +150,14 @@ class Ros2ControlAdapter:
     # -- ControlAdapter -----------------------------------------------------
 
     def connect(self, profile: RobotProfile, config: dict[str, Any]) -> None:
+        if profile.control_mode is not ControlMode.STREAMING:
+            raise UnsupportedControlModeError(
+                f"{profile.name}: профиль объявляет control_mode: {profile.control_mode}, а "
+                f"связь ros2_control исполняет только потоковый класс — фазы движения, "
+                f"движения по рамке профиля и отказа во время движения у неё нет (ADR-0049, "
+                f"ADR-0058). Робот, которого ведёт ros2_control, — control_mode: streaming "
+                f"с навыками move_joints и hold"
+            )
         action = profile.contract.action.type
         if names.command_topic("", profile) is None:
             raise UnsupportedActionError(
@@ -156,7 +174,6 @@ class Ros2ControlAdapter:
             if "capabilities" in config
             else frozenset(profile.capabilities)
         )
-        self._control_mode = ControlMode(config.get("control_mode", profile.control_mode))
         self._limits = profile.limits
         self._enforce_limits = bool(config.get("enforce_limits", True))
         self._poll_s = float(config.get("poll_timeout", DEFAULT_POLL_S))
@@ -265,7 +282,7 @@ class Ros2ControlAdapter:
         return self._capabilities
 
     def control_mode(self) -> ControlMode:
-        return self._control_mode
+        return ControlMode.STREAMING
 
     def safety_limits(self) -> Limits:
         return self._limits
@@ -370,19 +387,16 @@ class Ros2ControlAdapter:
     def _publication(self, profile: RobotProfile, values: tuple[float, ...]) -> Publication:
         """One command, as the message its controller subscribes to."""
         if self._command_message == names.TRAJECTORY_MESSAGE:
-            point: dict[str, Any] = {"positions": [float(v) for v in values]}
-            if names.closes_through_gains(profile):
-                # The drive's law, tau = kp * (q* - q) - kd * dq, from the tick the
-                # point arrives: desired state (q*, 0) at once. A later time would
-                # interpolate a ramp, or hold the state at receipt for a whole
-                # period with no torque toward the target (ADR-0045).
-                point["velocities"] = [0.0] * len(values)
-                point["time_from_start"] = 0.0
-            else:
-                # The trajectory controller is told to reach the point in one
-                # command period: the rate is the contract's, so the platform is
-                # not inventing a duration, only restating one it was given.
-                point["time_from_start"] = 1.0 / profile.contract.command_rate_hz
+            # In the streaming class the trajectory controller carries only the drive's
+            # law of an action closed through gains (ADR-0019), tau = kp * (q* - q) -
+            # kd * dq, from the tick the point arrives: desired state (q*, 0) at once. A
+            # later time would interpolate a ramp, or hold the state at receipt for a
+            # whole period with no torque toward the target (ADR-0045).
+            point: dict[str, Any] = {
+                "positions": [float(v) for v in values],
+                "velocities": [0.0] * len(values),
+                "time_from_start": 0.0,
+            }
             fields: dict[str, Any] = {
                 "joint_names": list(profile.contract.joint_order),
                 "points": [point],

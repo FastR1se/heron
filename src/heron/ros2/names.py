@@ -63,6 +63,15 @@ odometry, the second from whoever produced the action."""
 INTERFACE_ORDER: Final = ("position", "velocity", "effort")
 """Stable order for interfaces, so two runs list them the same way."""
 
+TRAJECTORY_STATE_INTERFACES: Final = frozenset({"position", "velocity", "acceleration"})
+"""State interfaces the trajectory controller accepts.
+
+Its parameter ``state_interfaces`` is declared ``subset_of: position, velocity,
+acceleration`` (``joint_trajectory_controller_parameters.yaml``): the controller
+tracks a path and reads nothing else. An effort the contract observes is the
+broadcaster's to publish; named to this controller, it makes the controller refuse
+its configuration, and the scene comes up with a robot nobody drives."""
+
 # -- controllers -----------------------------------------------------------
 
 STREAMING_CONTROLLERS: Final[dict[ActionType, str]] = {
@@ -176,6 +185,12 @@ def state_interfaces(profile: RobotProfile) -> list[str]:
     if closes_through_gains(profile):
         wanted.add(VELOCITY_INTERFACE)
     return [name for name in INTERFACE_ORDER if name in wanted]
+
+
+def trajectory_state_interfaces(profile: RobotProfile) -> list[str]:
+    """What the trajectory controller of this robot reads: its state interfaces the
+    controller accepts. The description and the broadcaster keep all of them."""
+    return [name for name in state_interfaces(profile) if name in TRAJECTORY_STATE_INTERFACES]
 
 
 def controller_name(profile: RobotProfile) -> str:

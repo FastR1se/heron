@@ -674,6 +674,32 @@ def test_gains_become_the_trajectory_controllers_law(tmp_path: Path) -> None:
     assert controller["interpolation_method"] == "none"
 
 
+def test_an_observed_effort_is_published_and_not_handed_to_the_trajectory_controller(
+    tmp_path: Path,
+) -> None:
+    """The description and the broadcaster carry every interface the contract observes;
+    the trajectory controller is named only those it accepts, or it refuses to configure."""
+    profile = _profile(
+        tmp_path,
+        contract=make_contract(
+            dof=3,
+            observation=[
+                ObservationTerm(type=ObservationType.JOINT_POS),
+                ObservationTerm(type=ObservationType.JOINT_TORQUE),
+            ],
+            action=ActionSpec(type=ActionType.JOINT_POSITION, kp=[60.0] * 3, kd=[1.0] * 3),
+        ),
+        limits=Limits(joint_position=JointRange(min=[-1.0] * 3, max=[1.5] * 3)),
+    )
+    document = yaml.safe_load(controllers_config(_instance(tmp_path, profile)).content)
+    controller = document["/arm1/joint_trajectory_controller"]["ros__parameters"]
+    generated = merged_description(_instance(tmp_path, profile), tmp_path / "out").content
+
+    assert state_interfaces(profile) == ["position", "velocity", "effort"]
+    assert '<state_interface name="effort"' in generated
+    assert controller["state_interfaces"] == ["position", "velocity"]
+
+
 def test_an_effort_interface_is_not_bounded_by_angles(tmp_path: Path) -> None:
     """Position limits hung on a torque would bound the wrong quantity."""
     profile = _compliant_profile(tmp_path)

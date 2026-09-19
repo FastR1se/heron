@@ -298,7 +298,7 @@ def controllers_config(instance: Instance) -> GeneratedFile:
     controller: dict[str, Any] = {"joints": joints}
     if names.uses_trajectory_controller(profile):
         controller["command_interfaces"] = [command_interface(profile)]
-        controller["state_interfaces"] = state_interfaces(profile)
+        controller["state_interfaces"] = names.trajectory_state_interfaces(profile)
     action = profile.contract.action
     if action.kp is not None and action.kd is not None:
         # The law of the joint drive, run by the controller at the manager's

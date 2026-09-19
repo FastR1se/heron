@@ -20,6 +20,7 @@ from heron.adapters.ros2_control import (
     SafetyViolationError,
     StateMismatchError,
     UnsupportedActionError,
+    UnsupportedControlModeError,
 )
 from heron.core.contract import ActionSpec
 from heron.core.enums import ActionType, ControlMode
@@ -236,18 +237,21 @@ def test_position_command_becomes_a_float_array_on_the_controller_topic() -> Non
     ]
 
 
-def test_command_mode_robot_gets_a_trajectory_with_one_point() -> None:
-    profile = make_profile(control_mode=ControlMode.COMMAND)
-    adapter, transport = connected(profile)
-    adapter.send_command(Command(type=ActionType.JOINT_POSITION, values=(0.1, 0.2, 0.3)))
+def test_a_robot_of_the_command_class_is_refused_before_anything_is_wired() -> None:
+    """ADR-0058: the link has no phase, no envelope-bound motion and no refusal during
+    one (ADR-0049), so it does not drive a profile that promises them."""
+    transport = RecordingTransport()
+    adapter = Ros2ControlAdapter(transport)
 
-    sent = transport.published[0]
-    assert sent.topic == "/arm1/joint_trajectory_controller/joint_trajectory"
-    assert sent.message_type == names.TRAJECTORY_MESSAGE
-    assert sent.fields["joint_names"] == JOINTS
-    assert sent.fields["points"][0]["positions"] == [0.1, 0.2, 0.3]
-    assert sent.fields["points"][0]["time_from_start"] == pytest.approx(1 / 50)
-    assert "velocities" not in sent.fields["points"][0], "движение за время, а не закон привода"
+    with pytest.raises(UnsupportedControlModeError, match="control_mode: streaming"):
+        adapter.connect(make_profile(control_mode=ControlMode.COMMAND), {"namespace": "arm1"})
+    assert not transport.subscribed
+    assert not transport.advertised
+
+
+def test_the_link_reports_its_own_class_not_the_profiles() -> None:
+    adapter, _ = connected()
+    assert adapter.control_mode() is ControlMode.STREAMING
 
 
 def test_gains_send_the_point_at_once_and_ask_for_no_speed() -> None:
