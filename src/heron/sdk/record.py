@@ -110,6 +110,10 @@ def _pose(pose: Pose | None) -> dict[str, Any] | None:
     return {"position": _vector(pose.position), "orientation": _vector(pose.orientation)}
 
 
+def _optional(values: Sequence[float] | None) -> list[float | None] | None:
+    return None if values is None else _vector(values)
+
+
 def state_fields(state: RobotState) -> dict[str, Any]:
     return {
         "timestamp": state.timestamp,
@@ -117,6 +121,8 @@ def state_fields(state: RobotState) -> dict[str, Any]:
         "joint_velocity": _vector(state.joint_velocity),
         "joint_torque": _vector(state.joint_torque),
         "base": _pose(state.base),
+        "base_orientation": _optional(state.base_orientation),
+        "base_angular_velocity": _optional(state.base_angular_velocity),
         "motion": None if state.motion is None else str(state.motion),
         "extra": state.extra,
     }
@@ -146,6 +152,20 @@ def _pose_of(data: Mapping[str, Any] | None) -> Pose | None:
     )
 
 
+def _quaternion_of(data: Sequence[float | None] | None) -> tuple[float, float, float, float] | None:
+    if data is None:
+        return None
+    w, x, y, z = _floats(data)
+    return (w, x, y, z)
+
+
+def _triple_of(data: Sequence[float | None] | None) -> tuple[float, float, float] | None:
+    if data is None:
+        return None
+    x, y, z = _floats(data)
+    return (x, y, z)
+
+
 def state_of(data: Mapping[str, Any]) -> RobotState:
     return RobotState(
         timestamp=float(data["timestamp"]),
@@ -153,6 +173,8 @@ def state_of(data: Mapping[str, Any]) -> RobotState:
         joint_velocity=_floats(data["joint_velocity"]),
         joint_torque=_floats(data["joint_torque"]),
         base=_pose_of(data.get("base")),
+        base_orientation=_quaternion_of(data.get("base_orientation")),
+        base_angular_velocity=_triple_of(data.get("base_angular_velocity")),
         motion=None if data.get("motion") is None else MotionPhase(data["motion"]),
         extra=dict(data.get("extra") or {}),
     )

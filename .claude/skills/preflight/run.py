@@ -63,6 +63,7 @@ def steps(quick: bool) -> list[Step]:
         Step("Тесты пакетов задач", [
             tool("pytest"), "-q",
             "examples/plugins/arm6_reach/tests", "examples/plugins/g1_upper_reach/tests",
+            "examples/plugins/g1_stand/tests",
         ]),
         Step("CLI отвечает", [CLI, "version"]),
         Step("Профили проверяются", [

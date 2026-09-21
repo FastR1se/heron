@@ -35,8 +35,11 @@ SYSTEM_PLUGINS: Final = (
     ("gz-sim-physics-system", "gz::sim::systems::Physics"),
     ("gz-sim-user-commands-system", "gz::sim::systems::UserCommands"),
     ("gz-sim-scene-broadcaster-system", "gz::sim::systems::SceneBroadcaster"),
+    ("gz-sim-imu-system", "gz::sim::systems::Imu"),
 )
-"""Minimum set: step the world, accept spawn requests, publish the scene."""
+"""Minimum set: step the world, accept spawn requests, publish the scene, measure any
+IMU a description declares. The last does nothing without one, and a robot that
+measures its body gets it without the world learning its name (ADR-0076)."""
 
 
 def physics_step(instances: Sequence[Instance]) -> float:

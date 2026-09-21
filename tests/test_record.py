@@ -150,6 +150,27 @@ def test_a_value_that_is_not_a_number_is_written_as_null_and_read_back_as_one(
     assert state.value.joint_position[1] == 1.0
 
 
+def test_what_the_robot_measures_of_its_body_is_recorded(tmp_path: Path) -> None:
+    """Orientation and turn rate travel with the joints; absent stays absent (ADR-0076)."""
+    path = tmp_path / "body.mcap"
+    recorder = McapRecorder(path, {}, origin_ns=0)
+    recorder.state(
+        0.0,
+        RobotState(
+            timestamp=1.0,
+            base_orientation=(0.9, 0.1, -0.2, 0.3),
+            base_angular_velocity=(0.5, -0.6, 0.7),
+        ),
+    )
+    recorder.state(0.1, RobotState(timestamp=1.1))
+    recorder.close(None)
+
+    measured, silent = read_record(path).states
+    assert measured.value.base_orientation == (0.9, 0.1, -0.2, 0.3)
+    assert measured.value.base_angular_velocity == (0.5, -0.6, 0.7)
+    assert (silent.value.base_orientation, silent.value.base_angular_velocity) == (None, None)
+
+
 def test_a_file_that_is_not_a_record_is_refused(tmp_path: Path) -> None:
     from mcap.writer import Writer
 

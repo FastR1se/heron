@@ -27,7 +27,9 @@ What is derived from what:
   without: a policy learned against one stiffness is not the same policy against
   another (ADR-0019, ADR-0045);
 * whether the base is fixed -- from the description, by the one rule that holds in
-  every world (ADR-0018, ADR-0048). The platform does not fix a base.
+  every world (ADR-0018, ADR-0048). The platform does not fix a base;
+* where the robot appears -- the learner's ``pose`` in the scenario, as a world of
+  execution places it (ADR-0077).
 
 The spec carries the contract as well as what was derived from it. That is not a
 second statement of the same thing but a derivation recorded next to its source,
@@ -74,6 +76,7 @@ SUPPORTED_TERMS: Final = frozenset(
         ObservationType.BASE_LIN_VEL,
         ObservationType.BASE_ANG_VEL,
         ObservationType.BASE_ORIENTATION,
+        ObservationType.PROJECTED_GRAVITY,
     }
 )
 """Observation terms this backend can build. Every member of the registry is
@@ -143,6 +146,10 @@ class TrainSpec(BaseModel):
     fix_base: bool
     """Whether the description bolts the robot to the world (ADR-0048)."""
 
+    base_position: tuple[float, float, float]
+    """Where the root of the articulation appears, metres: the learner's ``pose`` in
+    the scenario (ADR-0077). A reset scatters around it, never from zero."""
+
     dt: float = Field(gt=0)
     decimation: int = Field(gt=0)
     action: ActionMapping
@@ -196,7 +203,8 @@ class TrainSpec(BaseModel):
             f"эпизод      {self.completion.horizon_s:g} с; допуск "
             f"{self.completion.tolerance:g} {contract.angle_unit}, выдержка "
             f"{self.completion.hold_s:g} с",
-            f"база        {'закреплена описанием' if self.fix_base else 'свободна'}",
+            f"база        {'закреплена описанием' if self.fix_base else 'свободна'}, "
+            f"появляется в [{', '.join(f'{v:g}' for v in self.base_position)}]",
             f"действие    {self.action.type}, clip "
             f"{f'±{self.action.clip:g}' if self.action.clip is not None else '—'}, "
             f"ширина {self.action_size}",
@@ -228,6 +236,7 @@ def derive(
     task: str,
     profile: RobotProfile,
     description: Path,
+    pose: tuple[float, float, float],
     skill: SkillSpec,
     completion: Completion,
 ) -> TrainSpec:
@@ -259,6 +268,7 @@ def derive(
         task=task,
         contract_id=contract.contract_id,
         fix_base=parse_urdf(description).fixed_to_world,
+        base_position=pose,
         dt=1.0 / contract.state_rate_hz,
         decimation=decimation,
         action=ActionMapping(

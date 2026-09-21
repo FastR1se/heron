@@ -41,6 +41,7 @@ from heron.skills.learned import (
     PolicyRejectedError,
     map_action,
     observation_vector,
+    projected_gravity,
 )
 from heron.store.policies import ONNX_FILE, PolicyArtifact, PolicyStore
 from policies import store_policy, zero_weights
@@ -91,6 +92,58 @@ def test_the_observation_is_the_terms_in_order_each_times_its_scale() -> None:
         ]
     )
     assert len(values) == contract.observation_size
+
+
+BODY_TERMS = [
+    ObservationTerm(type=ObservationType.BASE_ANG_VEL, scale=0.25),
+    ObservationTerm(type=ObservationType.PROJECTED_GRAVITY),
+    ObservationTerm(type=ObservationType.BASE_ORIENTATION),
+    ObservationTerm(type=ObservationType.TARGET_JOINT_POS),
+]
+
+
+def test_the_body_is_observed_as_the_robot_measures_it() -> None:
+    """Upright and turning: down is -z of the base, the rate is the gyroscope's (ADR-0076)."""
+    contract = make_policy_contract(observation=BODY_TERMS)
+    state = RobotState(
+        timestamp=0.0,
+        joint_position=(0.0, 0.0, 0.0),
+        base_orientation=(1.0, 0.0, 0.0, 0.0),
+        base_angular_velocity=(0.4, -0.8, 1.2),
+    )
+    values = observation_vector(contract, state, TARGET, (0.0, 0.0, 0.0))
+    assert values == pytest.approx(
+        [0.1, -0.2, 0.3, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0, 0.0, *TARGET]
+    )
+    assert len(values) == contract.observation_size
+
+
+@pytest.mark.parametrize(
+    ("orientation", "down"),
+    [
+        # Rolled +90 deg about x: the base's +y points up, so down is its -y.
+        ((0.5**0.5, 0.5**0.5, 0.0, 0.0), (0.0, -1.0, 0.0)),
+        # Pitched +90 deg about y: down is along the base's +x.
+        ((0.5**0.5, 0.0, 0.5**0.5, 0.0), (1.0, 0.0, 0.0)),
+        # Yaw does not change where down is.
+        ((0.5**0.5, 0.0, 0.0, 0.5**0.5), (0.0, 0.0, -1.0)),
+        # Upside down; a quaternion and its negation are one orientation.
+        ((0.0, -1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+        # A sensor's rounding is normalized away rather than tilting the answer.
+        ((2.0, 0.0, 0.0, 0.0), (0.0, 0.0, -1.0)),
+    ],
+)
+def test_projected_gravity_is_down_seen_from_the_base(
+    orientation: tuple[float, float, float, float], down: tuple[float, float, float]
+) -> None:
+    assert projected_gravity(orientation) == pytest.approx(down, abs=1e-12)
+
+
+def test_a_body_term_the_adapter_does_not_report_is_not_invented() -> None:
+    contract = make_policy_contract(observation=BODY_TERMS)
+    state = RobotState(timestamp=0.0, joint_position=(0.0, 0.0, 0.0), base=Pose())
+    with pytest.raises(ObservationError, match="base_ang_vel"):
+        observation_vector(contract, state, TARGET, (0.0, 0.0, 0.0))
 
 
 def test_a_state_that_does_not_fit_the_contract_is_not_padded() -> None:

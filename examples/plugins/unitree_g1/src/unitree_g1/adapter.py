@@ -351,6 +351,9 @@ class G1DdsAdapter:
             joint_position=tuple(reading.q[slot] for slot in self._slots),
             joint_velocity=tuple(reading.dq[slot] for slot in self._slots),
             joint_torque=tuple(reading.tau_est[slot] for slot in self._slots),
+            # The pelvis IMU: what the robot measures of its body (ADR-0076).
+            base_orientation=reading.imu_quaternion,
+            base_angular_velocity=reading.imu_gyroscope,
         )
 
     def _command(

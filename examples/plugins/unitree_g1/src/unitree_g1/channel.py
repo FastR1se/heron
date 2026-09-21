@@ -99,6 +99,11 @@ class LowStateReading:
     q: tuple[float, ...]
     dq: tuple[float, ...]
     tau_est: tuple[float, ...]
+    imu_quaternion: tuple[float, float, float, float]
+    """``imu_state.quaternion`` of the pelvis IMU, ``w, x, y, z`` (ADR-0076)."""
+
+    imu_gyroscope: tuple[float, float, float]
+    """``imu_state.gyroscope``, rad/s in the IMU's frame, whose axes are the pelvis's."""
 
     def __post_init__(self) -> None:
         for name in ("q", "dq", "tau_est"):
@@ -245,8 +250,11 @@ class RecordingChannel:
         dq: Sequence[float] = (),
         tau_est: Sequence[float] = (),
         mode_pr: int = 0,
+        imu_quaternion: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+        imu_gyroscope: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ) -> None:
-        """Queue one state; slots nothing is said about read zero, as empty slots do."""
+        """Queue one state; slots nothing is said about read zero, as empty slots do,
+        and an IMU nothing is said about reads upright and still."""
 
         def padded(values: Sequence[float]) -> tuple[float, ...]:
             return (*map(float, values), *(0.0,) * (SLOT_COUNT - len(values)))
@@ -259,5 +267,7 @@ class RecordingChannel:
                 q=padded(q),
                 dq=padded(dq),
                 tau_est=padded(tau_est),
+                imu_quaternion=imu_quaternion,
+                imu_gyroscope=imu_gyroscope,
             )
         )

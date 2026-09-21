@@ -55,6 +55,7 @@ def build(profile: RobotProfile, description: Path) -> object:
         task="reach",
         profile=profile,
         description=description,
+        pose=(0.0, 0.0, 0.0),
         skill=SkillSpec(
             name="reach", required_capabilities=profile.capabilities
         ),

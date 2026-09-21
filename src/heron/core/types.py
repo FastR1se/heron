@@ -37,6 +37,16 @@ class RobotState:
     joint_velocity: tuple[float, ...] = ()
     joint_torque: tuple[float, ...] = ()
     base: Pose | None = None
+    """Pose of the base in the world, where the world knows it. A robot on its feet does
+    not: what it measures of its own body is the two fields below (ADR-0076)."""
+
+    base_orientation: tuple[float, float, float, float] | None = None
+    """Orientation of the base as the robot measures it, ``w, x, y, z`` in a gravity-aligned
+    world frame. ``None``: the link does not report one (ADR-0076)."""
+
+    base_angular_velocity: tuple[float, float, float] | None = None
+    """Angular velocity of the base in the base's own frame, rad/s (ADR-0076)."""
+
     motion: MotionPhase | None = None
     """Phase of the accepted motion, from the same reading of the robot as the pose
     (ADR-0049, ADR-0050). ``None``: the link does not report one, as a stream does not."""

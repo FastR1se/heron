@@ -112,6 +112,7 @@ TERM_FUNCS = {
     ObservationType.BASE_LIN_VEL: "base_lin_vel",
     ObservationType.BASE_ANG_VEL: "base_ang_vel",
     ObservationType.BASE_ORIENTATION: "root_quat_w",
+    ObservationType.PROJECTED_GRAVITY: "projected_gravity",
 }
 """Contract term -> the framework's observation function. The two per-joint terms
 the platform owns -- the goal and the previous action -- are not here: they read a
@@ -257,6 +258,7 @@ def articulation(spec: TrainSpec, usd: Path) -> ArticulationCfg:
         prim_path="{ENV_REGEX_NS}/Robot",
         spawn=sim_utils.UsdFileCfg(usd_path=str(usd)),
         init_state=ArticulationCfg.InitialStateCfg(
+            pos=tuple(spec.base_position),
             joint_pos=dict(zip(joints, pose, strict=True)),
             joint_vel=dict.fromkeys(joints, 0.0),
         ),

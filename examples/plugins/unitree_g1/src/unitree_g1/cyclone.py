@@ -143,6 +143,9 @@ class CycloneChannel:
 
 def _reading(sample: Any) -> LowStateReading:
     motors = sample.motor_state
+    imu = sample.imu_state
+    w, x, y, z = (float(value) for value in imu.quaternion)
+    gx, gy, gz = (float(value) for value in imu.gyroscope)
     return LowStateReading(
         tick=int(sample.tick),
         mode_machine=int(sample.mode_machine),
@@ -150,4 +153,6 @@ def _reading(sample: Any) -> LowStateReading:
         q=tuple(float(motor.q) for motor in motors),
         dq=tuple(float(motor.dq) for motor in motors),
         tau_est=tuple(float(motor.tau_est) for motor in motors),
+        imu_quaternion=(w, x, y, z),
+        imu_gyroscope=(gx, gy, gz),
     )

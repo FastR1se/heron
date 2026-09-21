@@ -138,6 +138,9 @@
 - **0045** Закон привода один: `tau = kp·(q* − q) − kd·dq` на `state_rate_hz`, момент в пределе URDF. Isaac — `IdealPDActuator`, шаг `1/state_rate_hz`; Gazebo — `interpolation_method: none`, `time_from_start: 0`, нулевые `velocities`.
 - **0046** Артефакт — `store_root()/policies/<name>/<artifact_id>/` (`policy.onnx`, `manifest.json`, `train.json`), `artifact_id = sha256(канонический манифест)[:16]`, манифест держит хеш ONNX и completion. Прогоны — `data_home()/train/…`. Ссылка `<name>@<id>`, привязка в `skills`; необъявленный навык — `scenario.skill_not_in_profile`. Нет артефакта: `validate` — предупреждение, `run` — ошибка.
 - **0047** `LearnedSkill` в ядре; сверка (`policy.*`, различие контрактов) — до требований и `connect`. `onnxruntime` — группа `onnx`, CPU, один поток. Такт: наблюдение → сеть → клип → отображение → команда → завершение. Отказ — 0026; 0032 не применяется.
+- **0075** G1 учится стоять: задача `g1_stand`, свободная база, контракт всего тела 6 (ревизия 2, коэффициенты по ADR-0063 п. 5), цель — `default_pose`. Стойка — не локомоция; порог 0005 в силе. Стартовое условие прогона в Gazebo не решено: пауза мира не активирует контроллеры.
+- **0076** Корпус — измерение робота: `RobotState.base_orientation` (`w, x, y, z`) и `base_angular_velocity` (система базы); терм `projected_gravity`; `base_ang_vel` наблюдаем, `base_lin_vel` — нет. G1: IMU таза из `LowState.imu_state`, мост — датчик на `imu_in_pelvis`; мир всегда грузит `gz-sim-imu-system`.
+- **0077** Ученик появляется в `pose` сценария: `TrainSpec.base_position` → `init_state.pos`.
 
 **Комплекс (координатор)**
 - **0065** Миссия — YAML в своём файле, роботов не называет: задача — `skill`, `goal`, `required_capabilities` и `requires` сверх навыка, `after`, `robot`. Команды принимают сцену и миссию; `Scenario.task` остаётся для `run`.

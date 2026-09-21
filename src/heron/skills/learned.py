@@ -97,9 +97,11 @@ def observation_vector(
         elif kind is ObservationType.PREVIOUS_ACTION:
             part = previous
         elif kind is ObservationType.BASE_ORIENTATION:
-            if state.base is None:
-                raise ObservationError("base_orientation: в состоянии нет позы базы")
-            part = state.base.orientation
+            part = _measured(state.base_orientation, kind)
+        elif kind is ObservationType.PROJECTED_GRAVITY:
+            part = projected_gravity(_measured(state.base_orientation, kind))
+        elif kind is ObservationType.BASE_ANG_VEL:
+            part = _measured(state.base_angular_velocity, kind)
         else:
             raise ObservationError(f"{kind}: в состоянии робота этой величины нет")
         values.extend(float(value) * term.scale for value in part)
@@ -121,6 +123,32 @@ def map_action(
         for u, s, o in zip(clipped, contract.action_scale(), contract.origin(), strict=True)
     )
     return clipped, targets
+
+
+def projected_gravity(orientation: Sequence[float]) -> tuple[float, float, float]:
+    """``R(q)^T (0, 0, -1)``: which way is down, seen from the base (ADR-0076).
+
+    ``q`` is ``w, x, y, z`` and need not be exactly unit: a measured quaternion is
+    normalized first, so a sensor's rounding does not tilt the answer. The third
+    row of ``R(q)``, negated -- the same quantity Isaac Lab's ``projected_gravity``
+    computes with ``quat_apply_inverse``.
+    """
+    w, x, y, z = (float(value) for value in orientation)
+    norm = (w * w + x * x + y * y + z * z) ** 0.5
+    if norm == 0.0:
+        raise ObservationError("base_orientation: нулевой кватернион — ориентации нет")
+    w, x, y, z = w / norm, x / norm, y / norm, z / norm
+    return (
+        -2.0 * (x * z - w * y),
+        -2.0 * (y * z + w * x),
+        -(1.0 - 2.0 * (x * x + y * y)),
+    )
+
+
+def _measured(values: Sequence[float] | None, kind: ObservationType) -> Sequence[float]:
+    if values is None:
+        raise ObservationError(f"{kind}: адаптер не сообщает эту величину корпуса")
+    return values
 
 
 def _joints(values: Sequence[float], field: str, dof: int) -> Sequence[float]:

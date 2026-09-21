@@ -244,6 +244,21 @@ def test_state_is_read_back_by_name_and_stamped_with_world_time() -> None:
     assert state.joint_torque == pytest.approx([float(slot) for slot in slots])
 
 
+def test_the_pelvis_imu_is_what_the_body_measures_of_itself() -> None:
+    """``imu_state`` as it is on the wire: quaternion ``w, x, y, z``, gyroscope (ADR-0076)."""
+    adapter, channel, _ = connected(states=1)
+    channel.deliver_state(
+        10,
+        mode_machine=4,
+        imu_quaternion=(0.9, 0.1, -0.2, 0.3),
+        imu_gyroscope=(0.5, -0.6, 0.7),
+    )
+    state = adapter.read_state()
+    assert state.base_orientation == pytest.approx((0.9, 0.1, -0.2, 0.3))
+    assert state.base_angular_velocity == pytest.approx((0.5, -0.6, 0.7))
+    assert state.base is None, "положения в мире робот не знает"
+
+
 def test_no_new_state_returns_the_last_one_with_its_stamp() -> None:
     adapter, _, _ = connected(states=1)
     first = adapter.read_state()

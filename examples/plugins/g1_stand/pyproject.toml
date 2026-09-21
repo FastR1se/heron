@@ -1,0 +1,28 @@
+[project]
+name = "g1-stand"
+version = "0.1.0"
+description = "Training task for the G1 on a free base: keep standing"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# The platform is a dependency like any other, and what this package takes from it
+# is its public API and nothing else (ADR-0021, ADR-0044); a test in the platform
+# reads the imports to hold it to that. The body's observation terms arrive with
+# ADR-0076, on main as 0.5.0.dev0 until the release.
+#
+# Isaac Lab is deliberately not listed: it lives in the training environment, and the
+# backend declares it as an environment requirement checked before a run (ADR-0025).
+dependencies = ["heron>=0.5.0.dev0"]
+
+# The sixth extension point. The name is what a scenario's learner writes in its
+# `task` field, and the name the artifact is stored under.
+[project.entry-points."heron.train_tasks"]
+g1_stand = "g1_stand.task:G1StandTask"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/g1_stand"]

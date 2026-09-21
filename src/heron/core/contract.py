@@ -82,6 +82,7 @@ BASE_OBSERVATION_WIDTHS: Final[dict[ObservationType, int]] = {
     ObservationType.BASE_LIN_VEL: 3,
     ObservationType.BASE_ANG_VEL: 3,
     ObservationType.BASE_ORIENTATION: 4,
+    ObservationType.PROJECTED_GRAVITY: 3,
 }
 """Widths of terms that are not per joint. Orientation is ``w, x, y, z``, as ``Pose``."""
 

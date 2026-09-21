@@ -126,6 +126,19 @@ def test_the_plan_names_the_process_and_the_directory(
     assert plan.run == tmp_path / "run"
 
 
+def test_the_learner_appears_where_the_scenario_places_it(
+    backend: IsaacLabBackend, scenario: Scenario
+) -> None:
+    """One placement for both worlds: the scenario's ``pose`` (ADR-0077)."""
+    assert backend.build_env(scenario).spec.base_position == (0.0, 0.0, 0.0)
+
+    robot = scenario.robots[0].model_copy(update={"pose": (0.5, -0.5, 0.8)})
+    placed = scenario.model_copy(update={"robots": [robot]})
+    plan = backend.build_env(placed)
+    assert plan.spec.base_position == (0.5, -0.5, 0.8)
+    assert any("появляется в [0.5, -0.5, 0.8]" in line for line in plan.spec.lines())
+
+
 def test_the_process_module_is_never_spelled_out() -> None:
     """Section 17: the platform's name is built from the package, not typed."""
     from heron.core.branding import APP_NAME

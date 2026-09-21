@@ -18,8 +18,9 @@ from ..core.models import PolicyManifest, RobotProfile
 from ..store.policies import ONNX_FILE, PolicyArtifact, file_sha256
 from .report import Report, error
 
-UNOBSERVABLE_TERMS: Final = frozenset({ObservationType.BASE_LIN_VEL, ObservationType.BASE_ANG_VEL})
-"""Terms a robot state does not carry: it has no base velocities (ADR-0042)."""
+UNOBSERVABLE_TERMS: Final = frozenset({ObservationType.BASE_LIN_VEL})
+"""Terms a robot state does not carry: a robot measures how its body turns, not how
+it travels (ADR-0042, ADR-0076)."""
 
 EXECUTABLE_ACTIONS: Final = frozenset({ActionType.JOINT_POSITION})
 """Actions a trained skill emits in this phase (ADR-0047)."""
@@ -206,8 +207,8 @@ def _check_executable(manifest: PolicyManifest, report: Report, where: str) -> N
                 "policy.observation_unavailable",
                 where,
                 f"термы {', '.join(unobservable)}: в состоянии робота этих величин нет",
-                hint="наблюдение собирается из RobotState; скоростей базы в нём нет",
-                adr="ADR-0042",
+                hint="наблюдение собирается из RobotState; линейной скорости базы в нём нет",
+                adr="ADR-0076",
                 detail={"terms": unobservable},
             )
         )

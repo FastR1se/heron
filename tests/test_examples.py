@@ -561,6 +561,7 @@ def test_the_mounted_robot_trains_on_a_fixed_base_at_the_rates_of_its_link(
         task="t",
         profile=profile,
         description=resolve_description(profile, path),
+        pose=(0.0, 0.0, 0.0),
         skill=SkillSpec(
             name="t", required_capabilities=frozenset({Capability("arm.joint_position")})
         ),

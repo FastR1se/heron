@@ -24,6 +24,8 @@ from unitree_g1.bridge import (
     BRIDGE_PACKAGE,
     CONTROLLER,
     CONTROLLER_TYPE,
+    IMU_INTERFACES,
+    IMU_LINK,
     MESSAGES_PACKAGE,
     PARAMETERS,
     RMW,
@@ -86,12 +88,20 @@ def instance(profile: RobotProfile | None = None) -> Instance:
     )
 
 
-def description(joints: Sequence[str], *, mounted: bool = False) -> UrdfModel:
+def description(
+    joints: Sequence[str], *, mounted: bool = False, imu: bool = True
+) -> UrdfModel:
     """A chain of revolute joints with these names: all the bridge's block reads.
 
     ``mounted`` bolts the pelvis to the world, as the mounted G1's description does (ADR-0063).
+    ``imu`` hangs the vendor's IMU link on the pelvis, as both vendor descriptions do.
     """
     parts = ['<robot name="g1">', '<link name="pelvis"/>']
+    if imu:
+        parts.append(
+            f'<link name="{IMU_LINK}"/><joint name="{IMU_LINK}_joint" type="fixed">'
+            f'<parent link="pelvis"/><child link="{IMU_LINK}"/></joint>'
+        )
     if mounted:
         parts.append(
             '<link name="world"/><joint name="world_joint" type="fixed">'
@@ -153,6 +163,35 @@ def test_the_bridge_is_told_the_joints_their_slots_and_the_body() -> None:
     assert 13 not in bridge["slots"] and 14 not in bridge["slots"]
     assert bridge["mode_machine"] == 4
     assert (bridge["command_topic"], bridge["state_topic"]) == ("/lowcmd", "/lowstate")
+    assert bridge["imu_sensor"] == "g1_imu"
+
+
+# -- the body, measured (ADR-0076) -------------------------------------------------
+
+
+def test_the_pelvis_imu_is_a_sensor_of_the_world_loaned_to_the_bridge() -> None:
+    """The same name in three places: the world's sensor, the loan, the bridge's parameter."""
+    block, _, sensor = G1GazeboTwin().description_elements(
+        instance(), description(JOINTS_23DOF), ROOT
+    )
+    (loaned,) = block.findall("sensor")
+    assert loaned.get("name") == "g1_imu"
+    assert [s.get("name") for s in loaned.findall("state_interface")] == list(IMU_INTERFACES)
+    assert loaned.find("command_interface") is None
+
+    assert sensor.tag == "gazebo" and sensor.get("reference") == IMU_LINK
+    world = sensor.find("sensor")
+    assert world is not None
+    assert (world.get("name"), world.get("type")) == ("g1_imu", "imu")
+    assert world.findtext("update_rate") == "500", "на частоте состояния контракта"
+    assert world.findtext("imu/orientation_reference_frame/localization") == "ENU"
+
+
+def test_a_description_without_the_imu_link_gets_no_bridge() -> None:
+    with pytest.raises(GeneratorError, match=IMU_LINK):
+        G1GazeboTwin().description_elements(
+            instance(), description(JOINTS_23DOF, imu=False), ROOT
+        )
 
 
 def test_slots_follow_joint_names_not_their_order() -> None:
@@ -170,7 +209,7 @@ def test_every_joint_is_commanded_with_effort_and_read_back_in_position_and_velo
     elements = G1GazeboTwin().description_elements(
         instance(), description(JOINTS_23DOF), ROOT
     )
-    block, plugin = elements
+    block, plugin, _ = elements
     assert block.tag == "ros2_control"
     assert block.findtext("hardware/plugin") == ros2_control.HARDWARE_PLUGIN
 
@@ -293,6 +332,13 @@ def test_the_controller_declares_exactly_the_parameters_the_twin_writes() -> Non
     assert source.count("auto_declare<") == len(PARAMETERS)
 
 
+def test_the_controller_reads_the_imu_interfaces_the_twin_loans_in_that_order() -> None:
+    source = (ROS2_DIR / "src" / "low_level_bridge.cpp").read_text(encoding="utf-8")
+    table = re.search(r"kImuInterfaces = \{(.*?)\};", source, re.DOTALL)
+    assert table is not None
+    assert re.findall(r'"([\w.]+)"', table.group(1)) == list(IMU_INTERFACES)
+
+
 def test_the_controller_class_is_the_type_the_manager_is_told() -> None:
     source = (ROS2_DIR / "src" / "low_level_bridge.cpp").read_text(encoding="utf-8")
     package, name = CONTROLLER_TYPE.split("/")
@@ -348,7 +394,7 @@ def test_an_upper_body_on_a_mounted_description_is_bridged_as_its_body() -> None
 def test_the_legs_of_an_upper_body_are_read_and_not_commanded() -> None:
     """ADR-0012 as it stands: a leg of the description outside the contract is observed only."""
     whole = [*LAYOUT[:12], *JOINTS_UPPER_BODY_6]
-    block, _ = G1GazeboTwin().description_elements(
+    block, _, _ = G1GazeboTwin().description_elements(
         instance(profile_upper_body()), description(whole, mounted=True), ROOT
     )
     for joint in block.iter("joint"):

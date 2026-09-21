@@ -349,6 +349,22 @@ def test_a_policy_observing_the_base_velocity_is_rejected() -> None:
     assert finding.detail["terms"] == ["base_lin_vel"]
 
 
+def test_a_policy_observing_how_the_body_turns_and_where_down_is_may_run() -> None:
+    """A robot measures both of its body; the adapter that does not says so on a tick (ADR-0076)."""
+    contract = make_policy_contract(
+        observation=[
+            ObservationTerm(type=ObservationType.BASE_ANG_VEL),
+            ObservationTerm(type=ObservationType.PROJECTED_GRAVITY),
+            ObservationTerm(type=ObservationType.TARGET_JOINT_POS),
+        ]
+    )
+    report = check_policy_against_profile(
+        make_manifest(contract=contract), make_profile(contract=contract)
+    )
+    assert "policy.observation_unavailable" not in report.codes()
+    assert contract.observation_size == 3 + 3 + contract.dof
+
+
 def test_a_policy_that_does_not_command_positions_is_rejected_in_this_phase() -> None:
     contract = make_policy_contract(
         action=ActionSpec(type=ActionType.JOINT_VELOCITY, clip=(-1.0, 1.0))

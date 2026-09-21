@@ -228,6 +228,7 @@ class IsaacLabBackend:
             task=str(robot.task),
             profile=profile,
             description=description,
+            pose=robot.pose,
             skill=_skill_spec(task, robot),
             completion=_completion(task),
         )

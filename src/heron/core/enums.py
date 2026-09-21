@@ -81,6 +81,9 @@ class ObservationType(StrEnum):
     BASE_LIN_VEL = "base_lin_vel"
     BASE_ANG_VEL = "base_ang_vel"
     BASE_ORIENTATION = "base_orientation"
+    PROJECTED_GRAVITY = "projected_gravity"
+    """The unit gravity vector in the base's frame, ``R(q)^T (0, 0, -1)`` (ADR-0076)."""
+
     PREVIOUS_ACTION = "previous_action"
     """The policy's output of the previous tick after ``clip``, before ``scale``."""
 

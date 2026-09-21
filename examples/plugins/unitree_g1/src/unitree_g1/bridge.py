@@ -58,9 +58,40 @@ STATE_MESSAGE: Final = f"{MESSAGES_PACKAGE}/msg/LowState"
 RMW: Final = "rmw_cyclonedds_cpp"
 """The ROS 2 middleware the world runs on: CycloneDDS 0.10, as the robot (ADR-0022, p. 6)."""
 
-PARAMETERS: Final = ("joints", "slots", "mode_machine", "command_topic", "state_topic")
+PARAMETERS: Final = (
+    "joints",
+    "slots",
+    "mode_machine",
+    "command_topic",
+    "state_topic",
+    "imu_sensor",
+)
 """Parameters of the controller, in the order they are written. The C++ side declares
 exactly these, and a test of the package reads its source to hold the two together."""
+
+IMU_LINK: Final = "imu_in_pelvis"
+"""The link of the vendor's description the robot's ``LowState.imu_state`` is measured at.
+Its axes are the pelvis's (``rpy="0 0 0"``), and the pelvis is the root a policy is
+trained on (ADR-0076)."""
+
+IMU_INTERFACES: Final = (
+    "orientation.w",
+    "orientation.x",
+    "orientation.y",
+    "orientation.z",
+    "angular_velocity.x",
+    "angular_velocity.y",
+    "angular_velocity.z",
+)
+"""State interfaces ``gz_ros2_control`` gives an IMU, in the order ``LowState`` carries them:
+``quaternion`` is ``w, x, y, z``, ``gyroscope`` is ``x, y, z``. The C++ side reads exactly
+these, and a test holds the two together."""
+
+
+def imu_sensor(instance: Instance) -> str:
+    """Name of the robot's IMU in the world: from its id, as the names of its topics are."""
+    return f"{instance.id}_imu"
+
 
 BRIDGE_PACKAGES: Final[dict[str, str]] = {
     BRIDGE_PACKAGE: "scripts/install.sh install unitree_g1 (часть ws), затем окружение мира: "
@@ -99,9 +130,12 @@ class G1GazeboTwin:
         self, instance: Instance, description: UrdfModel, root: Path
     ) -> list[ET.Element]:
         _check_profile(instance.id, instance.profile, description)
+        block = ros2_control_block(instance, description)
+        block.append(imu_interfaces(instance))
         return [
-            ros2_control_block(instance, description),
+            block,
             simulator_plugin_block(instance, controllers_path(instance, root)),
+            imu_block(instance, description),
         ]
 
     def files(self, instance: Instance, root: Path) -> list[GeneratedFile]:
@@ -146,6 +180,36 @@ def link_of(instance: Instance) -> LinkConfig:
         raise GeneratorError(f"{instance.id}: {target}: {exc}") from exc
 
 
+def imu_interfaces(instance: Instance) -> ET.Element:
+    """The IMU as ``gz_ros2_control`` loans it to a controller: state interfaces, no command."""
+    sensor = ET.Element("sensor", {"name": imu_sensor(instance)})
+    for name in IMU_INTERFACES:
+        ET.SubElement(sensor, "state_interface", {"name": name})
+    return sensor
+
+
+def imu_block(instance: Instance, description: UrdfModel) -> ET.Element:
+    """The pelvis IMU of the robot, as a sensor the world measures (ADR-0076).
+
+    On the link the robot measures at, at the rate of the contract's state, orientation
+    against the world's ENU axes -- what the robot's ``imu_state.quaternion`` is, rather
+    than a sensor's rotation since it was spawned.
+    """
+    if IMU_LINK not in description.links:
+        raise GeneratorError(
+            f"{instance.id}: в описании {description.path.name} нет звена {IMU_LINK!r} — "
+            f"мосту негде измерить корпус, а LowState.imu_state робот заполняет всегда (ADR-0076)"
+        )
+    element = ET.Element("gazebo", {"reference": IMU_LINK})
+    sensor = ET.SubElement(element, "sensor", {"name": imu_sensor(instance), "type": "imu"})
+    ET.SubElement(sensor, "always_on").text = "true"
+    ET.SubElement(sensor, "update_rate").text = f"{instance.profile.contract.state_rate_hz:g}"
+    imu = ET.SubElement(sensor, "imu")
+    frame = ET.SubElement(imu, "orientation_reference_frame")
+    ET.SubElement(frame, "localization").text = "ENU"
+    return element
+
+
 def bridge_controller(instance: Instance, machine: int, slots: Sequence[int]) -> Controller:
     """The controller and everything about the robot it is told."""
     parameters: dict[str, Any] = {
@@ -154,6 +218,7 @@ def bridge_controller(instance: Instance, machine: int, slots: Sequence[int]) ->
         "mode_machine": machine,
         "command_topic": ros2_topic(COMMAND_TOPIC),
         "state_topic": ros2_topic(STATE_TOPIC),
+        "imu_sensor": imu_sensor(instance),
     }
     return Controller(CONTROLLER, CONTROLLER_TYPE, {name: parameters[name] for name in PARAMETERS})
 

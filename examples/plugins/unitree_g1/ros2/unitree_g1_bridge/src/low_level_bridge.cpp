@@ -47,6 +47,13 @@ constexpr char kSlotsParam[] = "slots";
 constexpr char kMachineParam[] = "mode_machine";
 constexpr char kCommandTopicParam[] = "command_topic";
 constexpr char kStateTopicParam[] = "state_topic";
+constexpr char kImuSensorParam[] = "imu_sensor";
+
+// The IMU's state interfaces, in the order LowState carries them: quaternion w, x, y, z,
+// then gyroscope x, y, z (ADR-0076). unitree_g1.bridge.IMU_INTERFACES, held by a test.
+constexpr std::array<const char *, 7> kImuInterfaces = {
+  "orientation.w", "orientation.x", "orientation.y", "orientation.z",
+  "angular_velocity.x", "angular_velocity.y", "angular_velocity.z"};
 
 constexpr std::size_t kSlotCount = std::tuple_size<LowCmd::_motor_cmd_type>::value;
 static_assert(
@@ -84,6 +91,7 @@ public:
     auto_declare<std::int64_t>(kMachineParam, -1);
     auto_declare<std::string>(kCommandTopicParam, std::string{});
     auto_declare<std::string>(kStateTopicParam, std::string{});
+    auto_declare<std::string>(kImuSensorParam, std::string{});
     return CallbackReturn::SUCCESS;
   }
 
@@ -103,6 +111,7 @@ public:
     const auto machine = node->get_parameter(kMachineParam).as_int();
     const auto command_topic = node->get_parameter(kCommandTopicParam).as_string();
     const auto state_topic = node->get_parameter(kStateTopicParam).as_string();
+    imu_sensor_ = node->get_parameter(kImuSensorParam).as_string();
 
     if (joints_.empty()) {
       return refuse("parameter 'joints' is empty: there is nothing to drive");
@@ -134,6 +143,9 @@ public:
     }
     if (command_topic.empty() || state_topic.empty()) {
       return refuse("parameters 'command_topic' and 'state_topic' must name topics");
+    }
+    if (imu_sensor_.empty()) {
+      return refuse("parameter 'imu_sensor' must name the IMU: LowState always carries imu_state");
     }
 
     subscription_ = node->create_subscription<LowCmd>(
@@ -170,6 +182,9 @@ public:
       configuration.names.push_back(joint + "/" + hardware_interface::HW_IF_POSITION);
       configuration.names.push_back(joint + "/" + hardware_interface::HW_IF_VELOCITY);
     }
+    for (const auto * name : kImuInterfaces) {
+      configuration.names.push_back(imu_sensor_ + "/" + name);
+    }
     return configuration;
   }
 
@@ -195,6 +210,16 @@ public:
       command_index_.push_back(*command);
       position_index_.push_back(*position);
       velocity_index_.push_back(*velocity);
+    }
+    for (std::size_t index = 0; index < kImuInterfaces.size(); ++index) {
+      const auto found = index_of(state_interfaces_, imu_sensor_, kImuInterfaces[index]);
+      if (!found) {
+        RCLCPP_ERROR(
+          get_node()->get_logger(), "IMU %s: state interface %s was not loaned",
+          imu_sensor_.c_str(), kImuInterfaces[index]);
+        return CallbackReturn::ERROR;
+      }
+      imu_index_[index] = *found;
     }
 
     // A command that arrived before activation is not one this controller was asked
@@ -260,6 +285,16 @@ public:
       reported.tau_est = static_cast<float>(tau);
     }
 
+    // The pelvis IMU, as the robot reports it: quaternion w, x, y, z; gyroscope x, y, z.
+    for (std::size_t index = 0; index < 4; ++index) {
+      state_.imu_state.quaternion[index] =
+        static_cast<float>(state_interfaces_[imu_index_[index]].get_value());
+    }
+    for (std::size_t index = 0; index < 3; ++index) {
+      state_.imu_state.gyroscope[index] =
+        static_cast<float>(state_interfaces_[imu_index_[4 + index]].get_value());
+    }
+
     // Milliseconds of world time, as the vendor's twin counts them; wraps like uint32.
     state_.tick = static_cast<std::uint32_t>(
       static_cast<std::uint64_t>(std::llround(time.seconds() * 1000.0)));
@@ -273,6 +308,8 @@ private:
   std::vector<std::size_t> command_index_;
   std::vector<std::size_t> position_index_;
   std::vector<std::size_t> velocity_index_;
+  std::string imu_sensor_;
+  std::array<std::size_t, kImuInterfaces.size()> imu_index_{};
 
   rclcpp::Subscription<LowCmd>::SharedPtr subscription_;
   rclcpp::Publisher<LowState>::SharedPtr publisher_;

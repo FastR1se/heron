@@ -125,6 +125,7 @@ def test_a_reading_states_every_slot() -> None:
         LowStateReading(
             tick=0, mode_machine=4, mode_pr=0,
             q=(0.0,) * SLOT_COUNT, dq=(0.0,) * 23, tau_est=(0.0,) * SLOT_COUNT,
+            imu_quaternion=(1.0, 0.0, 0.0, 0.0), imu_gyroscope=(0.0, 0.0, 0.0),
         )
 
 
