@@ -118,6 +118,121 @@ def test_profile_new_refuses_to_overwrite(tmp_path: Path) -> None:
     assert result.exit_code == EXIT_UNREADABLE
 
 
+DESCRIBED_ROBOT = """<?xml version="1.0"?>
+<robot name="described_arm">
+  <link name="world"/><link name="base"/><link name="l1"/><link name="l2"/>
+  <link name="l3"/><link name="f1"/><link name="f2"/><link name="tool"/>
+  <joint name="mount" type="fixed"><parent link="world"/><child link="base"/></joint>
+  <joint name="shoulder" type="revolute"><parent link="base"/><child link="l1"/>
+    <limit lower="-0.087267" upper="2.8798" effort="88" velocity="32"/></joint>
+  <joint name="wrist-roll" type="continuous"><parent link="l1"/><child link="l2"/>
+    <limit effort="25" velocity="37"/></joint>
+  <joint name="lift" type="prismatic"><parent link="l2"/><child link="l3"/>
+    <limit lower="0" upper="0.3" effort="100"/></joint>
+  <joint name="finger" type="prismatic"><parent link="l3"/><child link="f1"/>
+    <limit lower="0" upper="0.04" effort="5" velocity="0.1"/></joint>
+  <joint name="finger_mirror" type="prismatic"><parent link="l3"/><child link="f2"/>
+    <limit lower="0" upper="0.04" effort="5" velocity="0.1"/>
+    <mimic joint="finger"/></joint>
+  <joint name="flange" type="fixed"><parent link="l3"/><child link="tool"/></joint>
+</robot>
+"""
+
+
+def _described(tmp_path: Path) -> Path:
+    path = tmp_path / "model" / "described_arm.urdf"
+    path.parent.mkdir()
+    path.write_text(DESCRIBED_ROBOT, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("mode", ["streaming", "command"])
+def test_profile_new_from_a_description_validates(tmp_path: Path, mode: str) -> None:
+    """ADR-0074: the stub read from a description agrees with it on the day it is made."""
+    from heron.core.loading import load_model
+    from heron.core.models import RobotProfile
+
+    urdf = _described(tmp_path)
+    args = ["profile", "new", "described_arm", "--into", str(tmp_path / "stubs"),
+            "--control-mode", mode, "--from-urdf", str(urdf)]
+    assert runner.invoke(app, args).exit_code == EXIT_OK
+
+    root = tmp_path / "stubs" / "described_arm"
+    assert not (root / "urdf").exists()  # referenced, not copied
+    profile_path = root / "profile.yaml"
+    profile = load_model(profile_path, RobotProfile)
+    assert Path(profile.description.urdf).as_posix() == "../../model/described_arm.urdf"
+    assert list(profile.contract.joint_order) == ["shoulder", "wrist-roll", "lift", "finger"]
+    position = profile.limits.joint_position
+    assert position is not None
+    assert position.min[0] == -0.087267 and position.max[0] == 2.8798
+    assert (position.min[2], position.max[2]) == (0.0, 0.3)
+    assert profile.limits.joint_torque is not None
+    assert profile.limits.joint_torque.max == [88.0, 25.0, 100.0, 5.0]
+
+    text = profile_path.read_text(encoding="utf-8")
+    assert "записано ±π (линейный — ±1.0 м): wrist-roll" in text
+    assert "скорость в описании не задана, записано 1.0: lift" in text
+
+    result = runner.invoke(app, ["validate", str(profile_path)])
+    assert result.exit_code == EXIT_OK, result.stdout
+    assert "ошибка" not in result.stdout
+
+
+def test_profile_new_from_a_description_maps_the_action_into_its_frame(tmp_path: Path) -> None:
+    from heron.core.loading import load_model
+    from heron.core.models import RobotProfile
+
+    args = ["profile", "new", "described_arm", "--into", str(tmp_path),
+            "--from-urdf", str(_described(tmp_path))]
+    assert runner.invoke(app, args).exit_code == EXIT_OK
+    profile = load_model(tmp_path / "described_arm" / "profile.yaml", RobotProfile)
+    position = profile.limits.joint_position
+    assert position is not None
+    targets = profile.contract.action_targets()
+    assert targets is not None
+    for (low, high), lo, hi in zip(targets, position.min, position.max, strict=True):
+        assert lo <= low and high <= hi
+
+
+@pytest.mark.parametrize(
+    ("extra", "name"),
+    [
+        (["--dof", "3"], "described_arm.urdf"),
+        ([], "described_arm.urdf.xacro"),
+        ([], "missing.urdf"),
+    ],
+)
+def test_profile_new_from_a_description_refuses(
+    tmp_path: Path, extra: list[str], name: str
+) -> None:
+    urdf = _described(tmp_path)
+    if name.endswith(".xacro"):
+        urdf = urdf.with_name(name)
+        urdf.write_text(DESCRIBED_ROBOT, encoding="utf-8")
+    elif name != urdf.name:
+        urdf = urdf.with_name(name)
+    args = ["profile", "new", "some_bot", "--into", str(tmp_path), "--from-urdf", str(urdf)]
+    result = runner.invoke(app, args + extra)
+    assert result.exit_code == EXIT_UNREADABLE
+    assert not (tmp_path / "some_bot").exists()
+
+
+def test_profile_new_from_a_description_without_driven_joints_is_refused(
+    tmp_path: Path,
+) -> None:
+    urdf = tmp_path / "frame.urdf"
+    urdf.write_text(
+        '<?xml version="1.0"?><robot name="frame"><link name="a"/><link name="b"/>'
+        '<joint name="j" type="fixed"><parent link="a"/><child link="b"/></joint></robot>',
+        encoding="utf-8",
+    )
+    args = ["profile", "new", "frame", "--into", str(tmp_path), "--from-urdf", str(urdf)]
+    result = runner.invoke(app, args)
+    assert result.exit_code == EXIT_UNREADABLE
+    assert "нет управляемых суставов" in result.output
+
+
 def test_skill_check_reports_incompatibility(tmp_path: Path) -> None:
     from heron.core.enums import ControlMode
 

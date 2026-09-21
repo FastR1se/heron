@@ -754,7 +754,17 @@ def profile_show(
 def profile_new(
     name: Annotated[str, typer.Argument(help="Имя нового робота.")],
     into: Annotated[Path, typer.Option("--into", help="Куда положить заготовку.")] = Path("."),
-    dof: Annotated[int, typer.Option(help="Число суставов в заготовке.")] = 6,
+    dof: Annotated[
+        int | None, typer.Option(help="Число суставов в заготовке (по умолчанию 6).")
+    ] = None,
+    from_urdf: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-urdf",
+            help="Готовое описание: суставы и пределы берутся из него, файл не копируется "
+            "(ADR-0074).",
+        ),
+    ] = None,
     control_mode: Annotated[
         ControlMode,
         typer.Option(
@@ -765,8 +775,10 @@ def profile_new(
 ) -> None:
     """Создать заготовку профиля и пакет адаптера с тестом общего набора (раздел 9, ADR-0056)."""
     try:
-        stub = write_stub(name=name, into=into, dof=dof, control_mode=control_mode)
-    except (ValueError, FileExistsError) as exc:
+        stub = write_stub(
+            name=name, into=into, dof=dof, control_mode=control_mode, urdf=from_urdf
+        )
+    except (ValueError, FileExistsError, LoadError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(EXIT_UNREADABLE) from exc
     for path in stub.paths:

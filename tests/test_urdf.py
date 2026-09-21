@@ -66,6 +66,25 @@ def test_prismatic_joints_are_commandable_but_not_angular(tmp_path: Path) -> Non
     assert joint.commandable and not joint.angular
 
 
+def test_a_mimic_joint_names_the_joint_it_follows() -> None:
+    text = (
+        '<?xml version="1.0"?><robot name="hand">'
+        '<link name="a"/><link name="b"/><link name="c"/>'
+        '<joint name="lead" type="prismatic"><parent link="a"/><child link="b"/>'
+        '<limit lower="0" upper="0.04" effort="1" velocity="1"/></joint>'
+        '<joint name="follow" type="prismatic"><parent link="a"/><child link="c"/>'
+        '<limit lower="0" upper="0.04" effort="1" velocity="1"/>'
+        '<mimic joint="lead" multiplier="1"/></joint>'
+        "</robot>"
+    )
+    model = parse_urdf_text(text, Path("<память>"))
+    lead, follow = model.joint("lead"), model.joint("follow")
+    assert lead is not None and follow is not None
+    assert lead.mimic is None
+    assert follow.mimic == "lead"
+    assert follow.commandable  # read, not judged (ADR-0074)
+
+
 def test_meshes_are_collected_but_not_read() -> None:
     text = urdf_text(
         "arm",

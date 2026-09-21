@@ -23,16 +23,28 @@ of the generators: the platform never rewrites it again and from then on only
 compares it with the profile (ADR-0009). Without one the stub would not start in
 any world, and its owner would be left facing an empty ``description.urdf``,
 which is where a stub stops helping.
+
+Whoever already has a description -- a CAD export, a vendor's model -- starts
+from it instead (ADR-0074): the joints and their limits are read from the file,
+which stays where it is and is referenced, not copied. That is a starting point
+too, read once: from then on profile and description are two files the
+validator compares, and nothing rebuilds the one from the other.
 """
 
 from __future__ import annotations
 
+import json
+import math
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from ..core.branding import APP_NAME, APP_TITLE, ENTRY_POINT_GROUPS
 from ..core.enums import ControlMode
 from ..core.models import NAME_RE
+from ..core.urdf import UrdfJoint, UrdfModel, parse_urdf
 
 PROFILE_HEAD = """\
 # Профиль робота {name}. Заготовка: заполните TODO и проверьте валидатором.
@@ -41,18 +53,18 @@ schema_version: 1
 name: {name}
 
 description:
-  urdf: urdf/{name}.urdf   # заготовка описания; замените на настоящую модель
+  urdf: {urdf}   {urdf_note}
 
 # Контракт — соглашение о представлении данных между средами.
 # Его идентификатор вычисляется из содержимого; revision объявляется вручную.
 contract:
   revision: 1
-  joint_order: [{joints}]   # TODO: реальный порядок суставов
+  joint_order: [{joints}]   {order_note}
   angle_unit: rad
 """
 
 PROFILE_STREAMING = """\
-  state_rate_hz: 100
+{default_pose}  state_rate_hz: 100
   command_rate_hz: 50
   observation:
     - {{type: joint_pos, scale: 1.0}}
@@ -60,20 +72,20 @@ PROFILE_STREAMING = """\
   action:
     type: joint_position
     clip: [-1.0, 1.0]
-
+{action_map}
 # TODO: оставьте только то, что робот действительно умеет.
 capabilities: [arm.joint_position]
 
 control_mode: streaming    # streaming — поток команд; command — «выполни движение»
 access_levels: []          # для роботов со встроенным контроллером: high, partial, low
 
-limits:
+{limits_note}limits:
   joint_position:
-    min: [{mins}]   # TODO
-    max: [{maxs}]   # TODO
+    min: [{mins}]   {limits_todo}
+    max: [{maxs}]   {limits_todo}
   joint_velocity:
-    max: [{vels}]   # TODO
-
+    max: [{vels}]   {limits_todo}
+{torque}
 adapters:
   sim.dummy:
     plugin: dummy            # робот без железа: годится для проверки цепочки
@@ -102,14 +114,14 @@ access_levels: []
 
 # Рамка обязательна для прогона на железе (ADR-0051), а скорость и ускорение —
 # то, по чему контроллер строит движение, умноженные на шкалу прогона (ADR-0052).
-limits:
+{limits_note}limits:
   joint_position:
-    min: [{mins}]   # TODO
-    max: [{maxs}]   # TODO
+    min: [{mins}]   {limits_todo}
+    max: [{maxs}]   {limits_todo}
   joint_velocity:
-    max: [{vels}]   # TODO
-  joint_acceleration:
-    max: [{accs}]   # TODO
+    max: [{vels}]   {limits_todo}
+{torque}  joint_acceleration:
+    max: [{accs}]   {accs_todo}
 
 adapters:
   sim.dummy:
@@ -366,11 +378,12 @@ class Stub:
     adapter: Path
     testing: Path
     test: Path
-    description: Path
+    description: Path | None
+    """The skeleton description written, or ``None`` when the stub references one (ADR-0074)."""
 
     @property
     def paths(self) -> list[Path]:
-        return [
+        created = [
             self.profile,
             self.pyproject,
             self.package,
@@ -379,6 +392,7 @@ class Stub:
             self.test,
             self.description,
         ]
+        return [path for path in created if path is not None]
 
 
 def _skeleton_urdf(name: str, dof: int) -> str:
@@ -393,6 +407,168 @@ def _skeleton_urdf(name: str, dof: int) -> str:
     return URDF_TEMPLATE.format(name=name, dof=dof, links="".join(links))
 
 
+DEFAULT_DOF: Final = 6
+
+PLAIN_YAML_NAME: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+"""A joint name YAML reads as a string without quotes."""
+
+UNSTATED_ANGLE: Final = math.pi
+UNSTATED_LENGTH: Final = 1.0
+UNSTATED_VELOCITY: Final = 1.0
+"""What a stub writes where the description states no bound, always under a TODO."""
+
+
+def _scalar(value: str) -> str:
+    """A string as a YAML flow scalar: bare if it can be, JSON-quoted otherwise."""
+    return value if PLAIN_YAML_NAME.match(value) else json.dumps(value, ensure_ascii=False)
+
+
+def _number(value: float) -> str:
+    """The shortest form that reads back as the same float, as the canonical form writes."""
+    return repr(float(value))
+
+
+def _listed(values: list[float]) -> str:
+    return ", ".join(_number(value) for value in values)
+
+
+def _todo(what: str, joints: list[str]) -> str:
+    return f"# TODO: {what}: {', '.join(joints)}\n" if joints else ""
+
+
+def _reference(description: Path, root: Path) -> str:
+    """The description as the profile names it: relative to the profile where possible."""
+    target = description.resolve()
+    try:
+        stated = Path(os.path.relpath(target, root.resolve())).as_posix()
+    except ValueError:  # another drive: no relative path exists
+        stated = target.as_posix()
+    return json.dumps(stated, ensure_ascii=False)
+
+
+def _fitted(low: float, high: float) -> tuple[float, float]:
+    """Origin and scale that map ``clip [-1, 1]`` onto ``[low, high]`` and no further.
+
+    The half-range is stepped down by an ulp while rounding would carry a target
+    past a bound: the validator compares the same sums exactly (ADR-0041).
+    """
+    origin = (low + high) / 2
+    scale = (high - low) / 2
+    while origin + scale > high or origin - scale < low:
+        scale = math.nextafter(scale, 0.0)
+    return origin, scale
+
+
+def _stub_joints(model: UrdfModel) -> tuple[UrdfJoint, ...]:
+    """Joints a controller drives: commandable and not following another (ADR-0074)."""
+    return tuple(joint for joint in model.commandable_joints if joint.mimic is None)
+
+
+def _from_description(description: Path, root: Path) -> dict[str, str]:
+    """Template values read from an existing description (ADR-0074).
+
+    Only what the description states: joint order and the limits of each joint.
+    A bound it does not state is written as a placeholder under a TODO naming
+    the joint, never filled in silently.
+    """
+    model = parse_urdf(description)
+    joints = _stub_joints(model)
+    if not joints:
+        raise ValueError(
+            f"{description}: в описании нет управляемых суставов "
+            f"(revolute, continuous, prismatic без <mimic>)"
+        )
+
+    mins: list[float] = []
+    maxs: list[float] = []
+    vels: list[float] = []
+    unbounded: list[str] = []
+    no_velocity: list[str] = []
+    for joint in joints:
+        lower, upper = joint.limit.lower, joint.limit.upper
+        if lower is not None and upper is not None:
+            mins.append(lower)
+            maxs.append(upper)
+        else:
+            span = UNSTATED_ANGLE if joint.angular else UNSTATED_LENGTH
+            mins.append(-span)
+            maxs.append(span)
+            unbounded.append(joint.name)
+        velocity = joint.limit.velocity
+        if velocity is not None and velocity > 0:
+            vels.append(velocity)
+        else:
+            vels.append(UNSTATED_VELOCITY)
+            no_velocity.append(joint.name)
+
+    narrow = [joint.name for joint, lo, hi in zip(joints, mins, maxs, strict=True) if lo >= hi]
+    if narrow:
+        raise ValueError(
+            f"{description}: у суставов {', '.join(narrow)} lower >= upper — такой сустав "
+            f"заперт; в описании он fixed, а не управляемый"
+        )
+    fitted = [_fitted(lo, hi) for lo, hi in zip(mins, maxs, strict=True)]
+
+    efforts = [joint.limit.effort for joint in joints]
+    torque = ""
+    if all(effort is not None and effort > 0 for effort in efforts):
+        stated = [effort for effort in efforts if effort is not None]
+        torque = f"  joint_torque:\n    max: [{_listed(stated)}]   # из описания\n"
+
+    source = description.name
+    return {
+        "urdf": _reference(description, root),
+        "urdf_note": "# описание — вход: платформа его не меняет, только сверяет (ADR-0009)",
+        "joints": ", ".join(_scalar(joint.name) for joint in joints),
+        "order_note": f"# из {source}, порядок документа; порядок — часть контракта, подтвердите",
+        "mins": _listed(mins),
+        "maxs": _listed(maxs),
+        "vels": _listed(vels),
+        "accs": ", ".join(["2.0"] * len(joints)),
+        "limits_note": (
+            f"# Пределы взяты из {source} (ADR-0074): это механика модели. Рамка профиля —\n"
+            f"# предохранительная, не шире модели (раздел 12); сузьте её до рабочей.\n"
+            + _todo("пределов позиции в описании нет, записано ±π (линейный — ±1.0 м)", unbounded)
+            + _todo(
+                f"скорость в описании не задана, записано {_number(UNSTATED_VELOCITY)}",
+                no_velocity,
+            )
+        ),
+        "limits_todo": "# TODO: сузить",
+        "accs_todo": "# TODO: в описании ускорения нет",
+        "torque": torque,
+        "default_pose": (
+            f"  # TODO: поза отсчёта — середина рамки описания; замените на рабочую позу,\n"
+            f"  # а scale — на то, что нужно навыку: clip · scale + поза обязано лечь в рамку\n"
+            f"  default_pose: [{_listed([origin for origin, _ in fitted])}]\n"
+        ),
+        "action_map": (
+            f"    scale: [{_listed([scale for _, scale in fitted])}]\n"
+            f"    offset: default_pose\n"
+        ),
+    }
+
+
+def _placeholders(name: str, dof: int) -> dict[str, str]:
+    """Template values of a stub with its own skeleton description."""
+    return {
+        "urdf": f"urdf/{name}.urdf",
+        "urdf_note": "# заготовка описания; замените на настоящую модель",
+        "joints": ", ".join(f"joint{i}" for i in range(dof)),
+        "order_note": "# TODO: реальный порядок суставов",
+        "mins": ", ".join(["-3.14"] * dof),
+        "maxs": ", ".join(["3.14"] * dof),
+        "vels": ", ".join(["1.0"] * dof),
+        "accs": ", ".join(["2.0"] * dof),
+        "limits_note": "",
+        "limits_todo": "# TODO",
+        "accs_todo": "# TODO",
+        "torque": "",
+        "default_pose": "",
+        "action_map": "",
+    }
+
+
 def _class_name(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_")) + "Adapter"
 
@@ -400,12 +576,21 @@ def _class_name(name: str) -> str:
 def write_stub(
     name: str,
     into: Path,
-    dof: int = 6,
+    dof: int | None = None,
     control_mode: ControlMode = ControlMode.STREAMING,
+    urdf: Path | None = None,
 ) -> Stub:
-    """Write a profile, an adapter package and a skeleton description."""
+    """Write a profile and an adapter package, with a skeleton description or from ``urdf``.
+
+    Given ``urdf``, the joints and limits come from that description and no
+    skeleton is written (ADR-0074); the number of joints is then the
+    description's, and stating ``dof`` as well is refused.
+    """
     if not NAME_RE.match(name):
         raise ValueError(f"{name!r}: имя — нижний регистр, [a-z][a-z0-9_]*")
+    if urdf is not None and dof is not None:
+        raise ValueError("--dof и --from-urdf вместе не задаются: число суставов берёт описание")
+    dof = DEFAULT_DOF if dof is None else dof
     if dof < 1:
         raise ValueError(f"число суставов должно быть положительным, получено {dof}")
 
@@ -418,12 +603,13 @@ def write_stub(
         adapter=sources / "adapter.py",
         testing=sources / "testing.py",
         test=root / "tests" / f"test_{name}_adapter.py",
-        description=root / "urdf" / f"{name}.urdf",
+        description=None if urdf is not None else root / "urdf" / f"{name}.urdf",
     )
     for path in stub.paths:
         if path.exists():
             raise FileExistsError(f"{path} уже существует; заготовка не перезаписывает файлы")
 
+    shape = _from_description(Path(urdf), root) if urdf is not None else _placeholders(name, dof)
     command = control_mode is ControlMode.COMMAND
     klass = _class_name(name)
     values = {
@@ -433,12 +619,8 @@ def write_stub(
         "title": APP_TITLE,
         "group": ENTRY_POINT_GROUPS["adapters"],
         "dist": name.replace("_", "-"),
-        "joints": ", ".join(f"joint{i}" for i in range(dof)),
-        "mins": ", ".join(["-3.14"] * dof),
-        "maxs": ", ".join(["3.14"] * dof),
-        "vels": ", ".join(["1.0"] * dof),
-        "accs": ", ".join(["2.0"] * dof),
         "mode_member": control_mode.name,
+        **shape,
     }
     finish = FINISH_TEMPLATE.format(**values) if command else ""
     contents = {
@@ -453,8 +635,9 @@ def write_stub(
         stub.test: TEST_TEMPLATE.format(
             **values, finish="\n        finish=testing.finish," if command else ""
         ),
-        stub.description: _skeleton_urdf(name, dof),
     }
+    if stub.description is not None:
+        contents[stub.description] = _skeleton_urdf(name, dof)
     for path, text in contents.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")

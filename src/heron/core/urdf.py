@@ -92,6 +92,11 @@ class UrdfJoint:
     parent: str = ""
     child: str = ""
     limit: JointLimit = field(default_factory=JointLimit)
+    mimic: str | None = None
+    """The joint this one follows, if the description makes it a ``<mimic>``.
+
+    Read, not yet judged: a follower is left out of a stub's ``joint_order``
+    (ADR-0074), and no rule compares it with a profile."""
 
     @property
     def commandable(self) -> bool:
@@ -237,6 +242,7 @@ def parse_urdf_text(text: str, path: Path) -> UrdfModel:
             )
         parent = element.find("parent")
         child = element.find("child")
+        mimic = element.find("mimic")
         joints.append(
             UrdfJoint(
                 name=name,
@@ -244,6 +250,7 @@ def parse_urdf_text(text: str, path: Path) -> UrdfModel:
                 parent=(parent.get("link", "") if parent is not None else ""),
                 child=(child.get("link", "") if child is not None else ""),
                 limit=limit,
+                mimic=(mimic.get("joint") if mimic is not None else None),
             )
         )
 
